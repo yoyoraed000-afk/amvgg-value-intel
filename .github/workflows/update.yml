@@ -1,0 +1,72 @@
+name: Update predictions
+
+on:
+  schedule:
+    - cron: '7 * * * *'        # every hour: fetch what is new, rebuild, publish
+    - cron: '23 3 * * *'       # 03:23 UTC daily: deeper pass (more listings, more trader profiles)
+  workflow_dispatch:
+    inputs:
+      full:
+        description: 'Deep pass (more pages and profiles)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: update-predictions
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore rolling store (data branch)
+        run: |
+          git fetch --depth 1 origin data 2>/dev/null && git worktree add state origin/data || mkdir -p state
+          ls -la state || true
+
+      - name: Collect new data from amvgg.com
+        env:
+          FULL: ${{ (github.event_name == 'schedule' && github.event.schedule == '23 3 * * *') || (github.event_name == 'workflow_dispatch' && inputs.full) && '1' || '0' }}
+        run: |
+          echo "FULL=$FULL"
+          bash build/collect_incremental.sh
+          tail -3 build/raw/collect.log
+
+      - name: Merge into store and build data.json
+        run: perl build/build_state.pl site/data.json
+
+      - name: Save rolling store (single-commit data branch)
+        run: |
+          cd state
+          rm -rf .git
+          git init -q -b data
+          git -c user.name=amvgg-bot -c user.email=amvgg-bot@users.noreply.github.com add -A
+          git -c user.name=amvgg-bot -c user.email=amvgg-bot@users.noreply.github.com commit -qm "store $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" data
+
+      - name: Keep the schedule alive (monthly commit on main)
+        if: github.event_name == 'schedule' && github.event.schedule == '23 3 * * *'
+        run: |
+          if [ "$(date -u +%d)" = "01" ]; then
+            echo "last keepalive: $(date -u +%F)" > KEEPALIVE.md
+            git -c user.name=amvgg-bot -c user.email=amvgg-bot@users.noreply.github.com commit -qam "keepalive $(date -u +%F)" || true
+            git push -q "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:main || true
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

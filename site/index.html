@@ -1,0 +1,531 @@
+<title>AMVGG Value Intelligence</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    color-scheme: dark;
+    --page: #1b1b1b; --surface: #242424; --raised: #2e2e2e; --sunken: #171717;
+    --line: rgba(255,255,255,0.09); --line-strong: rgba(255,255,255,0.18);
+    --ink: #f2f2f2; --ink-2: #b9b9b3; --ink-3: #8a8a86;
+    --accent: #039ad6; --accent-ink: #e6f6ff; --accent-soft: rgba(3,154,214,0.16);
+    --brand: #fb0279;
+    --rise: #8dc53e; --rise-soft: rgba(141,197,62,0.16); --fall: #e86160; --fall-soft: rgba(232,97,96,0.16); --flat: #8a8a86;
+    --grid: #2c2c2a; --axis: #4a4a47;
+    --shadow: 0 10px 30px rgba(0,0,0,0.35);
+    --font-display: "Baloo 2", "Segoe UI", system-ui, sans-serif;
+    --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+      --page: #f4f4f1; --surface: #ffffff; --raised: #ecece8; --sunken: #e6e6e1;
+      --line: rgba(20,20,20,0.10); --line-strong: rgba(20,20,20,0.22);
+      --ink: #1b1b1b; --ink-2: #4f4f4b; --ink-3: #77776f;
+      --accent: #0a7fb0; --accent-ink: #063a52; --accent-soft: rgba(10,127,176,0.12);
+      --rise: #4e8a12; --rise-soft: rgba(78,138,18,0.12); --fall: #c73a3a; --fall-soft: rgba(199,58,58,0.12); --flat: #77776f;
+      --grid: #e1e0d9; --axis: #c3c2b7; --shadow: 0 10px 30px rgba(0,0,0,0.10);
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --page: #f4f4f1; --surface: #ffffff; --raised: #ecece8; --sunken: #e6e6e1;
+    --line: rgba(20,20,20,0.10); --line-strong: rgba(20,20,20,0.22);
+    --ink: #1b1b1b; --ink-2: #4f4f4b; --ink-3: #77776f;
+    --accent: #0a7fb0; --accent-ink: #063a52; --accent-soft: rgba(10,127,176,0.12);
+    --rise: #4e8a12; --rise-soft: rgba(78,138,18,0.12); --fall: #c73a3a; --fall-soft: rgba(199,58,58,0.12); --flat: #77776f;
+    --grid: #e1e0d9; --axis: #c3c2b7; --shadow: 0 10px 30px rgba(0,0,0,0.10);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.5; }
+  a { color: var(--accent); }
+  button, input, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .topbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: var(--sunken); border-bottom: 1px solid var(--line); }
+  .topbar-inner { max-width: 1200px; margin: 0 auto; padding: 10px 20px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  .wordmark { font-family: var(--font-display); font-weight: 800; font-size: 22px; letter-spacing: 0.01em; color: var(--ink); text-decoration: none; display: flex; align-items: baseline; gap: 8px; }
+  .wordmark .sub { font-family: var(--font-body); font-weight: 500; font-size: 13px; color: var(--ink-2); letter-spacing: 0.08em; text-transform: uppercase; }
+  .wordmark .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brand); display: inline-block; transform: translateY(-1px); }
+  .meta-line { margin-left: auto; color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+  nav.tabs { max-width: 1200px; margin: 0 auto; padding: 0 20px; display: flex; gap: 2px; overflow-x: auto; }
+  nav.tabs a { padding: 10px 14px; color: var(--ink-2); text-decoration: none; font-weight: 500; border-bottom: 2px solid transparent; white-space: nowrap; }
+  nav.tabs a.active { color: var(--ink); border-bottom-color: var(--accent); }
+  nav.tabs a:hover { color: var(--ink); }
+  main { max-width: 1200px; margin: 0 auto; padding: 22px 20px 60px; }
+  section.view { display: none; } section.view.active { display: block; }
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 700; line-height: 1.15; margin: 0; text-wrap: balance; }
+  h1 { font-size: 34px; } h2 { font-size: 22px; margin-bottom: 4px; } h3 { font-size: 16px; }
+  .lede { color: var(--ink-2); max-width: 68ch; margin: 6px 0 0; }
+  .section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 26px 0 12px; }
+  .section-head:first-child { margin-top: 0; }
+  .stat-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 18px 0 8px; }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .stat .label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+  .stat .num { font-family: var(--font-display); font-weight: 700; font-size: 26px; line-height: 1.1; margin-top: 4px; }
+  .stat .hint { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 860px) { .two-col { grid-template-columns: 1fr; } }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .panel h3 { margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .panel h3 .count { font-family: var(--font-body); font-weight: 500; font-size: 12px; color: var(--ink-3); }
+  table.grid { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  table.grid th, table.grid td { padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.grid th { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; white-space: nowrap; cursor: pointer; user-select: none; }
+  table.grid th.sorted { color: var(--ink); }
+  table.grid th.sorted::after { content: " ↓"; } table.grid th.sorted.asc::after { content: " ↑"; }
+  table.grid td.num, table.grid th.num { text-align: right; }
+  table.grid tr.row:hover td { background: var(--raised); }
+  table.grid td .name { color: var(--ink); font-weight: 500; cursor: pointer; text-decoration: none; }
+  table.grid td .name:hover { color: var(--accent); }
+  .table-wrap { overflow-x: auto; }
+  .chip { display: inline-block; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; padding: 1px 7px; border-radius: 4px; background: var(--raised); color: var(--ink-2); white-space: nowrap; }
+  .chip.high { background: var(--accent-soft); color: var(--accent); } .chip.highmid { background: var(--accent-soft); color: var(--accent); }
+  .chip.var { background: var(--sunken); color: var(--ink); border: 1px solid var(--line-strong); }
+  .tierbar { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 4px; }
+  .tierbtn { background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-weight: 600; display: inline-flex; gap: 8px; align-items: center; }
+  .tierbtn.active { border-color: var(--accent); background: var(--accent-soft); }
+  .tierbtn:hover { border-color: var(--line-strong); }
+  .move { font-weight: 600; white-space: nowrap; } .move.up { color: var(--rise); } .move.down { color: var(--fall); } .move.flat { color: var(--flat); }
+  .dir { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; font-size: 12px; }
+  .dir.up { background: var(--rise-soft); color: var(--rise); } .dir.down { background: var(--fall-soft); color: var(--fall); } .dir.flat { background: var(--raised); color: var(--ink-2); }
+  .conf { display: inline-flex; gap: 2px; vertical-align: middle; } .conf i { width: 6px; height: 10px; background: var(--raised); border-radius: 1px; display: inline-block; } .conf i.on { background: var(--accent); }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 0 0 12px; }
+  .controls label { font-size: 12px; color: var(--ink-2); display: flex; gap: 6px; align-items: center; }
+  .controls select, .controls input { background: var(--sunken); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 8px; color: var(--ink); }
+  .search { width: min(420px, 100%); font-size: 15px; padding: 9px 12px !important; }
+  .empty { color: var(--ink-3); padding: 14px 4px; }
+  .explorer-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .explorer-head .origin { color: var(--ink-2); }
+  .kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 14px 0; }
+  .kv div { background: var(--raised); border-radius: 6px; padding: 8px 10px; } .kv .k { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; } .kv .v { font-family: var(--font-display); font-weight: 700; font-size: 20px; }
+  .reasons { margin: 8px 0 0; padding-left: 18px; } .reasons li { margin: 3px 0; }
+  .chart { width: 100%; height: auto; display: block; }
+  .chart text { font-family: var(--font-body); font-size: 11px; fill: var(--ink-3); }
+  .chart .grid { stroke: var(--grid); stroke-width: 1; } .chart .axis { stroke: var(--axis); stroke-width: 1; }
+  .chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+  .chart .area { fill: var(--accent); opacity: 0.10; }
+  .chart .pred { stroke-dasharray: 4 4; stroke-width: 2; fill: none; }
+  .chart .pred.up { stroke: var(--rise); } .chart .pred.down { stroke: var(--fall); } .chart .pred.flat { stroke: var(--flat); }
+  .chart .marker { stroke-width: 2; } .chart .marker.up { fill: var(--rise); } .chart .marker.down { fill: var(--fall); } .chart .marker.flat { fill: var(--flat); }
+  .chart .end { fill: var(--accent); }
+  .chart .crosshair { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 2 3; }
+  .chart .bar { fill: var(--accent); } .chart .bar.obs { fill: var(--ink-3); } .chart .bar.pos { fill: var(--rise); } .chart .bar.neg { fill: var(--fall); }
+  .chart .lbl { fill: var(--ink-2); }
+  .chart-tip { position: absolute; pointer-events: none; background: var(--sunken); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 9px; font-size: 12px; box-shadow: var(--shadow); white-space: nowrap; display: none; }
+  .chart-wrap { position: relative; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2); margin-top: 4px; flex-wrap: wrap; } .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--accent); } .legend span.obs::before { background: var(--ink-3); } .legend span.rise::before { background: var(--rise); } .legend span.fall::before { background: var(--fall); }
+  .confusion { border-collapse: collapse; font-variant-numeric: tabular-nums; } .confusion td, .confusion th { border: 1px solid var(--line); padding: 6px 10px; text-align: right; } .confusion th { color: var(--ink-3); font-weight: 500; font-size: 12px; } .confusion td.diag { background: var(--accent-soft); font-weight: 600; }
+  .prose { max-width: 72ch; } .prose p { margin: 8px 0; } .prose h3 { margin-top: 18px; } .prose ul { padding-left: 20px; } .prose li { margin: 4px 0; }
+  pre { background: var(--sunken); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5; }
+  code { font-family: var(--font-mono); font-size: 0.93em; background: var(--raised); padding: 1px 5px; border-radius: 4px; }
+  .note { border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--accent-soft); border-radius: 0 6px 6px 0; margin: 12px 0; color: var(--ink); }
+  .warn { border-left-color: var(--fall); background: var(--fall-soft); }
+  .status { color: var(--ink-2); margin: 12px 0; }
+  .muted { color: var(--ink-3); }
+  @media (prefers-reduced-motion: no-preference) { nav.tabs a, .move { transition: color 0.15s; } }
+</style>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="wordmark" href="#overview">AMVGG.COM <span class="dot"></span><span class="sub">Value Intelligence</span></a>
+    <div class="meta-line" id="metaLine">loading data…</div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <a href="#overview" class="active">Overview</a><a href="#invest">Pets to invest in</a><a href="#opportunities">Opportunities</a><a href="#alerts">Alerts</a><a href="#explorer">Explorer</a><a href="#market">Market</a><a href="#backtest">Backtest</a><a href="#method">Method</a><a href="#integrate">Integrate</a>
+  </nav>
+</header>
+
+<main>
+  <section class="view active" id="view-overview">
+    <div class="section-head"><div><h1>Where values are heading</h1><p class="lede">Every item on amvgg.com scored for a likely value change over the next 30 days, from three evidence layers: the site's own update history, live listings, and completed trades between real traders.</p></div></div>
+    <div class="stat-strip" id="stats"></div>
+    <p class="status" id="buildStatus">Building the model in your browser…</p>
+    <div class="two-col">
+      <div class="panel"><h3>Raise candidates <span class="count" id="raiseCount"></span></h3><div class="table-wrap" id="raiseList"></div></div>
+      <div class="panel"><h3>Lower candidates <span class="count" id="lowerCount"></span></h3><div class="table-wrap" id="lowerList"></div></div>
+    </div>
+    <div class="note" style="margin-top:16px">Reading the tables: <b>Listed</b> is today's site value (FR for pets). <b>30d</b> is the model's expected value in 30 days. Confidence bars show how much live market evidence backs the call: one bar means the call rests on update history alone. Click any name to open it in the Explorer. Looking for what to buy? <a href="#invest">Pets to invest in</a> ranks every rising pet from the highest potential down; <a href="#opportunities">Opportunities</a> adds demand and how many are on the market.</div>
+  </section>
+
+  <section class="view" id="view-invest">
+    <div class="section-head"><div><h2>Pets to invest in</h2><p class="lede">Every pet variant the model expects to rise, ranked from the highest potential down. Potential is the expected change in listed value over the next 30 days, with the odds already priced in. Switch the ranking to value gained or to the safest bets.</p></div></div>
+    <div class="controls">
+      <label>Rank by <select id="iRank"><option value="expectedMove" selected>potential (expected % gain)</option><option value="gainAbs">value gained (absolute)</option><option value="pUp">safest (odds of a rise)</option><option value="flipScore">flip score (gain × odds × demand × liquidity)</option></select></label>
+      <label>Variant <select id="iVar"><option value="">all</option><option>Regular</option><option>Neon</option><option>Mega</option></select></label>
+      <label>Min value <select id="iMinVal"><option value="0">any</option><option value="0.01" selected>0.01 (low tier and up)</option><option value="0.03">0.03 (mid tier and up)</option><option value="0.1">0.1 (high-mid and up)</option><option value="0.45">0.45 (high only)</option></select></label>
+      <label>Min odds <select id="iMinP"><option value="0">any</option><option value="0.5" selected>50%</option><option value="0.65">65%</option><option value="0.8">80%</option></select></label>
+      <label>Demand <select id="iDemand"><option value="0">any</option><option value="1" selected>Medium or High</option><option value="2">High only</option></select></label>
+      <label>Show <select id="iCount"><option>25</option><option selected>50</option><option>100</option><option>1000</option></select></label>
+    </div>
+    <div class="panel"><h3>Ranked by potential <span class="count" id="investCount"></span></h3><div class="table-wrap" id="investTable"></div></div>
+    <div class="note" style="margin-top:16px"><b>How to read it.</b> <b>Buy at</b> is today's listed value of that variant; <b>Target</b> is the expected value in 30 days. <b>Potential</b> already multiplies the size of a typical raise by the odds the Value Board makes it, so a 95%-likely small raise and a 55%-likely big one can rank close together. <b>Odds</b> is the chance of any raise of 2% or more. Names open the Explorer, where the potion states and the trades behind the call are listed. The list is only as good as the snapshot date in the top bar; refresh the data before acting on it.</div>
+  </section>
+
+  <section class="view" id="view-opportunities">
+    <div class="section-head"><div><h2>Opportunities</h2><p class="lede">Pets and items worth trading into now: the expected gain over 30 days, the odds the Value Board actually raises it, whether traders want it, and how many are on the market to buy. Then the ones to move out of before they drop.</p></div></div>
+    <div class="controls">
+      <label>Variant <select id="oVar"><option value="">all</option><option>Regular</option><option>Neon</option><option>Mega</option></select></label>
+      <label>Min value <select id="oMinVal"><option value="0.01">0.01 (low tier and up)</option><option value="0.03" selected>0.03 (mid tier and up)</option><option value="0.1">0.1 (high-mid and up)</option><option value="0.45">0.45 (high only)</option></select></label>
+      <label>Min expected gain <select id="oMinGain"><option value="0.03">3%</option><option value="0.05" selected>5%</option><option value="0.10">10%</option><option value="0.15">15%</option></select></label>
+      <label>Min P(rise) <select id="oMinP"><option value="0.4">40%</option><option value="0.5" selected>50%</option><option value="0.65">65%</option><option value="0.8">80%</option></select></label>
+      <label>Demand <select id="oDemand"><option value="0">any</option><option value="1" selected>Medium or High</option><option value="2">High only</option></select></label>
+    </div>
+    <div class="panel"><h3>Best flips <span class="count" id="flipCount"></span></h3><div class="table-wrap" id="flipTable"></div></div>
+    <div class="two-col" style="margin-top:16px">
+      <div class="panel"><h3>Biggest expected rises <span class="count">any value ≥ 0.01, P(rise) ≥ 50%</span></h3><div class="table-wrap" id="bigRiseTable"></div></div>
+      <div class="panel"><h3>Move out before it drops <span class="count">lower calls, ranked by size × odds</span></h3><div class="table-wrap" id="dumpTable"></div></div>
+    </div>
+    <div class="note" style="margin-top:16px"><b>What “profitable” means here.</b> The engine predicts the site’s <i>listed</i> value. You only realise the gain if you can trade the pet at the new value, so the flip score rewards demand and liquidity (how often it appears in listings and completed trades) as well as size and odds. “Available now” is how many active listings offer it. A 20% rise on a 0.014 pet earns little in absolute terms; the “Gain (value)” column shows the expected change in value units so you can compare across tiers.</div>
+  </section>
+
+  <section class="view" id="view-alerts">
+    <div class="section-head"><div><h2>Alerts</h2><p class="lede">All items ranked by the strength of the expected move. Filter by direction, category and tier; click a column to sort.</p></div></div>
+    <div class="controls">
+      <label>Direction <select id="fDir"><option value="">any</option><option value="up">raise</option><option value="down">lower</option><option value="flat">flat</option></select></label>
+      <label>Variant <select id="fVar"><option value="">all</option><option>Regular</option><option>Neon</option><option>Mega</option></select></label>
+      <label>Category <select id="fCat"><option value="">all</option></select></label>
+      <label>Min tier <select id="fTier"><option value="0">any (incl. insignificant)</option><option value="1" selected>low and above (≥ 0.01)</option><option value="2">mid and above (≥ 0.03)</option><option value="3">high-mid and above (≥ 0.1)</option><option value="4">high only (≥ 0.45)</option></select></label>
+      <label>Market evidence <select id="fMarket"><option value="">any</option><option value="1">has market data</option></select></label>
+      <label>Rows <select id="fLimit"><option>50</option><option selected>100</option><option>250</option><option>2000</option></select></label>
+    </div>
+    <div class="panel"><div class="table-wrap" id="alertTable"></div></div>
+  </section>
+
+  <section class="view" id="view-explorer">
+    <div class="section-head"><div><h2>Explorer</h2><p class="lede">Search any pet or item to see its value history, the live trades behind the signal, and the reasoning for the prediction.</p></div></div>
+    <div class="controls"><input class="search" id="search" list="itemNames" placeholder="Type a pet or item name…" autocomplete="off"><datalist id="itemNames"></datalist></div>
+    <div id="explorer"><p class="empty">Pick an item to begin.</p></div>
+  </section>
+
+  <section class="view" id="view-market">
+    <div class="section-head"><div><h2>Market signals</h2><p class="lede">What live listings and completed trades say about each item right now. Overpay is the average premium traders paid relative to the listed value; pressure is a z-score combining overpay, want-to-offer ratio and asking premium.</p></div></div>
+    <div class="controls"><label>Min activity <input id="mMin" type="number" value="5" min="1" style="width:70px"></label><label>Min trade sides <input id="mSides" type="number" value="3" min="0" style="width:70px"></label><label>Rows <select id="mLimit"><option>100</option><option selected>250</option><option>3000</option></select></label></div>
+    <div class="panel"><div class="table-wrap" id="marketTable"></div></div>
+    <div class="section-head"><div><h2>Market-implied values</h2><p class="lede">Solved from completed trades only: the value each item would need for the trades it appeared in to balance. Ridge-anchored to the listed values, so a gap only opens where trades disagree with the list.</p></div></div>
+    <div class="panel"><div class="table-wrap" id="impliedTable"></div></div>
+    <div class="panel" style="margin-top:16px"><h3>Names in trades not found on the value list</h3><div id="unknownNames" class="muted"></div></div>
+  </section>
+
+  <section class="view" id="view-backtest">
+    <div class="section-head"><div><h2>Backtest</h2><p class="lede">The history model is trained on earlier weeks of the update log and tested on the most recent weeks it never saw. The question it answers: given an item's own history, will the Value Board move it up, down, or leave it within the next 30 days?</p></div></div>
+    <div id="backtest"></div>
+  </section>
+
+  <section class="view" id="view-method">
+    <div class="section-head"><div><h2>How the prediction works</h2></div></div>
+    <div class="panel prose" id="method"></div>
+  </section>
+
+  <section class="view" id="view-integrate">
+    <div class="section-head"><div><h2>Running this on amvgg.com</h2><p class="lede">The engine is one dependency-free JavaScript file. It reads the same shapes your database already holds, so it can run as a cron job inside the Next.js app instead of on a scraped snapshot.</p></div></div>
+    <div class="panel prose" id="integrate"></div>
+  </section>
+</main>
+<div class="chart-tip" id="tip"></div>
+
+<script src="engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var $ = function (s) { return document.querySelector(s); };
+  var DATA = null, MODEL = null;
+  var TIER_LABEL = { high: 'High', highmid: 'High-mid', mid: 'Mid', low: 'Low', insignificant: 'Insig.', unknown: '?' };
+  function fmtVal(v) { if (v == null || !isFinite(v)) return '—'; var r = AMVGGEngine.roundValue(v); return String(r); }
+  function fmtPct(x, d) { if (x == null || !isFinite(x)) return '—'; return (x >= 0 ? '+' : '−') + (Math.abs(x) * 100).toFixed(d == null ? 1 : d) + '%'; }
+  function fmtDate(t) { var d = new Date(t); if (!isFinite(d)) return '—'; return d.toISOString().slice(0, 10); }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function moveHTML(e, cls) { var c = cls || (e > 0.02 ? 'up' : e < -0.02 ? 'down' : 'flat'); var g = c === 'up' ? '▲ ' : c === 'down' ? '▼ ' : '● '; return '<span class="move ' + c + '">' + g + fmtPct(e) + '</span>'; }
+  function dirHTML(d) { var g = d === 'up' ? '▲ raise' : d === 'down' ? '▼ lower' : '● hold'; return '<span class="dir ' + d + '">' + g + '</span>'; }
+  function confHTML(c) { var n = c >= 0.6 ? 4 : c >= 0.35 ? 3 : c >= 0.12 ? 2 : 1; var h = '<span class="conf" title="market confidence ' + Math.round(c * 100) + '%">'; for (var i = 0; i < 4; i++) h += '<i class="' + (i < n ? 'on' : '') + '"></i>'; return h + '</span>'; }
+  function nameHTML(n) { return '<a class="name" href="#explorer" data-name="' + esc(n) + '">' + esc(n) + '</a>'; }
+  function tierHTML(t) { return '<span class="chip ' + t + '">' + TIER_LABEL[t] + '</span>'; }
+  function varHTML(p) { return p.cat === 'Pets' ? ' <span class="chip var">' + esc(p.variant) + '</span>' : ''; }
+  function subsHTML(r) { return r.subs.filter(function (s) { return s.code !== r.variantField; }).map(function (s) { return esc(s.label) + ' ' + fmtVal(s.value) + '→' + fmtVal(s.predicted); }).join(' · ') || '<span class="muted">—</span>'; }
+
+  /* ---------- generic sortable table ---------- */
+  var sortState = {}, currentExplorer = null;
+  function renderTable(el, id, cols, rows, opts) {
+    opts = opts || {}; var st = sortState[id] || (sortState[id] = { key: opts.sortKey, dir: opts.sortDir || 'desc' });
+    var sorted = rows.slice();
+    if (st.key) { var col = cols.find(function (c) { return c.key === st.key; }); var get = (col && col.val) ? col.val : function (r) { return r[st.key]; }; sorted.sort(function (a, b) { var va = get(a), vb = get(b); if (va == null) return 1; if (vb == null) return -1; if (typeof va === 'string') return st.dir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va); return st.dir === 'asc' ? va - vb : vb - va; }); }
+    if (opts.limit) sorted = sorted.slice(0, opts.limit);
+    var h = '<table class="grid"><thead><tr>' + cols.map(function (c) { return '<th class="' + (c.num ? 'num ' : '') + (st.key === c.key ? 'sorted ' + st.dir : '') + '" data-key="' + c.key + '">' + c.label + '</th>'; }).join('') + '</tr></thead><tbody>';
+    if (!sorted.length) h += '<tr><td colspan="' + cols.length + '" class="empty">Nothing matches.</td></tr>';
+    sorted.forEach(function (r) { h += '<tr class="row">' + cols.map(function (c) { return '<td class="' + (c.num ? 'num' : '') + '">' + c.fmt(r) + '</td>'; }).join('') + '</tr>'; });
+    el.innerHTML = h + '</tbody></table>';
+    el.querySelectorAll('th').forEach(function (th) { th.addEventListener('click', function () { var k = th.getAttribute('data-key'); if (st.key === k) st.dir = st.dir === 'asc' ? 'desc' : 'asc'; else { st.key = k; st.dir = 'desc'; } renderTable(el, id, cols, rows, opts); }); });
+  }
+
+  /* ---------- charts ---------- */
+  var tip = $('#tip');
+  function showTip(x, y, html) { tip.innerHTML = html; tip.style.display = 'block'; var w = tip.offsetWidth, ww = window.innerWidth; tip.style.left = Math.min(x + 14, ww - w - 8) + 'px'; tip.style.top = (y + 14) + 'px'; }
+  function hideTip() { tip.style.display = 'none'; }
+  function stepChart(container, pts, pred, now) {
+    var W = 760, H = 280, L = 58, R = 20, T = 16, B = 34;
+    var horizon = 30 * 86400000, tMin = pts[0].t, tMax = now + horizon;
+    var vals = pts.map(function (p) { return p.v; }); if (pred) vals.push(pred.predicted);
+    var vMin = Math.min.apply(null, vals), vMax = Math.max.apply(null, vals); if (vMax === vMin) { vMax *= 1.1; vMin *= 0.9; } var pad = (vMax - vMin) * 0.12; vMin = Math.max(0, vMin - pad); vMax += pad;
+    var x = function (t) { return L + (t - tMin) / (tMax - tMin) * (W - L - R); }, y = function (v) { return T + (1 - (v - vMin) / (vMax - vMin)) * (H - T - B); };
+    var s = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="value history">';
+    for (var i = 0; i <= 4; i++) { var v = vMin + (vMax - vMin) * i / 4, yy = y(v); s += '<line class="grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '"/><text x="' + (L - 6) + '" y="' + (yy + 4) + '" text-anchor="end">' + fmtVal(v) + '</text>'; }
+    var d = new Date(tMin); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 1); d.setUTCHours(0, 0, 0, 0);
+    for (; d.getTime() < tMax; d.setUTCMonth(d.getUTCMonth() + 1)) { var xx = x(d.getTime()); s += '<line class="grid" y1="' + T + '" y2="' + (H - B) + '" x1="' + xx + '" x2="' + xx + '"/><text x="' + xx + '" y="' + (H - B + 16) + '" text-anchor="middle">' + d.toLocaleString('en', { month: 'short', timeZone: 'UTC' }) + '</text>'; }
+    s += '<line class="axis" x1="' + L + '" x2="' + (W - R) + '" y1="' + (H - B) + '" y2="' + (H - B) + '"/>';
+    var path = '', area = 'M' + x(pts[0].t) + ' ' + y(vMin);
+    pts.forEach(function (p, i) { var px = x(p.t), py = y(p.v); if (i === 0) { path += 'M' + px + ' ' + py; area += ' L' + px + ' ' + py; } else { var prev = pts[i - 1]; path += ' L' + px + ' ' + y(prev.v) + ' L' + px + ' ' + py; area += ' L' + px + ' ' + y(prev.v) + ' L' + px + ' ' + py; } });
+    area += ' L' + x(pts[pts.length - 1].t) + ' ' + y(vMin) + ' Z';
+    s += '<path class="area" d="' + area + '"/><path class="line" d="' + path + '"/>';
+    var last = pts[pts.length - 1]; s += '<circle class="end" cx="' + x(last.t) + '" cy="' + y(last.v) + '" r="4"/>';
+    var nowX = x(now); s += '<line class="crosshair" x1="' + nowX + '" x2="' + nowX + '" y1="' + T + '" y2="' + (H - B) + '"/><text x="' + (nowX + 4) + '" y="' + (T + 10) + '">today</text>';
+    if (pred) { var px2 = x(now + horizon), py2 = y(pred.predicted); s += '<path class="pred ' + pred.direction + '" d="M' + x(last.t) + ' ' + y(last.v) + ' L' + px2 + ' ' + py2 + '"/><circle class="marker ' + pred.direction + '" cx="' + px2 + '" cy="' + py2 + '" r="5"/><text class="lbl" x="' + (px2 - 6) + '" y="' + (py2 - 9) + '" text-anchor="end">' + fmtVal(pred.predicted) + ' in 30d</text>'; }
+    s += '<rect id="hit" x="' + L + '" y="' + T + '" width="' + (W - L - R) + '" height="' + (H - T - B) + '" fill="transparent"/></svg>';
+    container.innerHTML = s;
+    var svg = container.querySelector('svg');
+    svg.addEventListener('mousemove', function (ev) { var rect = svg.getBoundingClientRect(), fx = (ev.clientX - rect.left) / rect.width * W; var t = tMin + (fx - L) / (W - L - R) * (tMax - tMin); if (t > now) { showTip(ev.clientX, ev.clientY, '<b>' + fmtDate(t) + '</b><br>projection'); return; } var v = pts[0].v; for (var i = 0; i < pts.length; i++) { if (pts[i].t <= t) v = pts[i].v; else break; } showTip(ev.clientX, ev.clientY, '<b>' + fmtDate(t) + '</b><br>value ' + fmtVal(v)); });
+    svg.addEventListener('mouseleave', hideTip);
+  }
+  function barPairs(container, rows, opts) { // rows: [{label, a, b}] grouped bars, values 0..1
+    var W = 560, H = 220, L = 44, R = 12, T = 14, B = 40, n = rows.length, gw = (W - L - R) / n, bw = Math.min(28, gw * 0.32);
+    var y = function (v) { return T + (1 - v) * (H - T - B); };
+    var s = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '">';
+    for (var i = 0; i <= 4; i++) { var v = i / 4, yy = y(v); s += '<line class="grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '"/><text x="' + (L - 6) + '" y="' + (yy + 4) + '" text-anchor="end">' + Math.round(v * 100) + '%</text>'; }
+    rows.forEach(function (r, i) { var cx = L + gw * (i + 0.5); var ya = y(r.a), yb = y(r.b); s += '<rect class="bar" x="' + (cx - bw - 1) + '" y="' + ya + '" width="' + bw + '" height="' + (y(0) - ya) + '" rx="3"><title>' + esc(opts.aLabel + ' ' + Math.round(r.a * 100) + '%') + '</title></rect><rect class="bar obs" x="' + (cx + 1) + '" y="' + yb + '" width="' + bw + '" height="' + (y(0) - yb) + '" rx="3"><title>' + esc(opts.bLabel + ' ' + Math.round(r.b * 100) + '%') + '</title></rect><text x="' + cx + '" y="' + (H - B + 16) + '" text-anchor="middle">' + esc(r.label) + '</text><text x="' + cx + '" y="' + (H - B + 30) + '" text-anchor="middle">n=' + r.n + '</text>'; });
+    s += '<line class="axis" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(0) + '" y2="' + y(0) + '"/></svg>';
+    container.innerHTML = s;
+  }
+  function hbar(container, rows) { // rows: [{label, v}] signed horizontal bars
+    var W = 560, rowH = 20, L = 190, R = 40, H = rows.length * rowH + 20, mx = Math.max.apply(null, rows.map(function (r) { return Math.abs(r.v); })) || 1;
+    var x0 = L + (W - L - R) / 2, sc = (W - L - R) / 2 / mx;
+    var s = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '"><line class="axis" x1="' + x0 + '" x2="' + x0 + '" y1="6" y2="' + (H - 10) + '"/>';
+    rows.forEach(function (r, i) { var yy = 10 + i * rowH, w = Math.abs(r.v) * sc; s += '<text x="' + (L - 8) + '" y="' + (yy + 13) + '" text-anchor="end">' + esc(r.label) + '</text><rect class="bar ' + (r.v >= 0 ? 'pos' : 'neg') + '" x="' + (r.v >= 0 ? x0 : x0 - w) + '" y="' + (yy + 3) + '" width="' + w + '" height="14" rx="2"><title>' + r.v.toFixed(3) + '</title></rect><text class="lbl" x="' + (r.v >= 0 ? x0 + w + 4 : x0 - w - 4) + '" y="' + (yy + 13) + '" text-anchor="' + (r.v >= 0 ? 'start' : 'end') + '">' + (r.v >= 0 ? '+' : '') + r.v.toFixed(2) + '</text>'; });
+    container.innerHTML = s + '</svg>';
+  }
+
+  /* ---------- views ---------- */
+  function renderStats() {
+    var s = MODEL ? MODEL.summary : null, m = DATA.meta.counts;
+    var tiles = [
+      ['Items tracked', m.items, 'across 10 categories'],
+      ['Value updates', s ? s.updateRows : m.updates, s ? s.updatesFrom + ' → ' + s.updatesTo : 'in the update log'],
+      ['Active listings', m.listings, s ? s.pricedListings + ' fully priceable' : 'from /trades'],
+      ['Completed trades', m.completed, s ? s.pricedCompleted + ' fully priceable' : 'from trader profiles'],
+      ['Raise calls', s ? s.raise : '…', 'across regular, neon and mega'],
+      ['Lower calls', s ? s.lower : '…', 'across regular, neon and mega']
+    ];
+    $('#stats').innerHTML = tiles.map(function (t) { return '<div class="stat"><div class="label">' + t[0] + '</div><div class="num">' + (typeof t[1] === 'number' ? t[1].toLocaleString() : t[1]) + '</div><div class="hint">' + t[2] + '</div></div>'; }).join('');
+  }
+  var listCols = [
+    { key: 'name', label: 'Item', fmt: function (r) { return nameHTML(r.name) + varHTML(r) + ' <span class="muted">' + esc(r.cat === 'Pets' ? '' : r.cat) + '</span>'; } },
+    { key: 'tier', label: 'Tier', fmt: function (r) { return tierHTML(r.tier); }, val: function (r) { return AMVGGEngine.TIER_ORDER[r.tier]; } },
+    { key: 'value', label: 'Listed', num: true, fmt: function (r) { return fmtVal(r.value); } },
+    { key: 'predicted', label: '30d', num: true, fmt: function (r) { return '<b>' + fmtVal(r.predicted) + '</b>'; } },
+    { key: 'expectedMove', label: 'Move', num: true, fmt: function (r) { return moveHTML(r.expectedMove, r.direction); } },
+    { key: 'marketConfidence', label: 'Evidence', fmt: function (r) { return confHTML(r.marketConfidence); } }
+  ];
+  function renderOverview() {
+    var ups = MODEL.predictions.filter(function (p) { return p.direction === 'up' && p.tier !== 'insignificant'; }), downs = MODEL.predictions.filter(function (p) { return p.direction === 'down' && p.tier !== 'insignificant'; });
+    $('#raiseCount').textContent = ups.length + ' items ≥ 0.01'; $('#lowerCount').textContent = downs.length + ' items ≥ 0.01';
+    renderTable($('#raiseList'), 'raise', listCols, ups, { sortKey: 'score', limit: 15 });
+    renderTable($('#lowerList'), 'lower', listCols, downs, { sortKey: 'score', limit: 15 });
+    var h = MODEL.history;
+    $('#buildStatus').innerHTML = 'Model built in ' + (MODEL.summary.buildMs / 1000).toFixed(1) + ' s · history window ' + MODEL.summary.historyDays + ' days · ' + (h.ok ? 'backtest accuracy ' + Math.round(h.metrics.accuracy * 100) + '% vs ' + Math.round(h.metrics.majorityBaseline * 100) + '% always-hold baseline (see Backtest)' : 'history model unavailable: ' + h.reason) + ' · market evidence on ' + MODEL.summary.itemsWithMarket + ' items.';
+  }
+  var alertCols = listCols.concat([
+    { key: 'pUp', label: 'P(up)', num: true, fmt: function (r) { return Math.round(r.pUp * 100) + '%'; } },
+    { key: 'pDown', label: 'P(down)', num: true, fmt: function (r) { return Math.round(r.pDown * 100) + '%'; } },
+    { key: 'marketPressure', label: 'Pressure', num: true, fmt: function (r) { return r.marketPressure == null ? '<span class="muted">—</span>' : (r.marketPressure >= 0 ? '+' : '') + r.marketPressure.toFixed(2); } },
+    { key: 'demand', label: 'Demand', fmt: function (r) { return esc(r.demand || '—'); } },
+    { key: 'lastUpdatedAt', label: 'Last update', fmt: function (r) { return fmtDate(r.lastUpdatedAt); } },
+    { key: 'score', label: 'Score', num: true, fmt: function (r) { return r.score.toFixed(3); } }
+  ]);
+  function renderAlerts() {
+    var dir = $('#fDir').value, cat = $('#fCat').value, tier = +$('#fTier').value, mk = $('#fMarket').value, lim = +$('#fLimit').value, vr = $('#fVar').value;
+    var rows = MODEL.predictions.filter(function (p) { return (!dir || p.direction === dir) && (!cat || p.cat === cat) && (!vr || p.variant === vr) && AMVGGEngine.TIER_ORDER[p.tier] >= tier && (!mk || p.marketConfidence > 0); });
+    renderTable($('#alertTable'), 'alerts', alertCols, rows, { sortKey: 'score', limit: lim });
+  }
+  var DEMAND_RANK = { High: 2, Medium: 1, Low: 0 };
+  var oppCols = [
+    { key: 'name', label: 'Item', fmt: function (r) { return nameHTML(r.name) + varHTML(r) + ' <span class="muted">' + esc(r.cat === 'Pets' ? '' : r.cat) + '</span>'; } },
+    { key: 'tier', label: 'Tier', fmt: function (r) { return tierHTML(r.tier); }, val: function (r) { return AMVGGEngine.TIER_ORDER[r.tier]; } },
+    { key: 'value', label: 'Buy at', num: true, fmt: function (r) { return fmtVal(r.value); } },
+    { key: 'predicted', label: '30d', num: true, fmt: function (r) { return '<b>' + fmtVal(r.predicted) + '</b>'; } },
+    { key: 'expectedMove', label: 'Gain', num: true, fmt: function (r) { return moveHTML(r.expectedMove, r.direction); } },
+    { key: 'gainAbs', label: 'Gain (value)', num: true, fmt: function (r) { return (r.gainAbs >= 0 ? '+' : '−') + fmtVal(Math.abs(r.gainAbs)); } },
+    { key: 'pUp', label: 'P(rise)', num: true, fmt: function (r) { return Math.round(r.pUp * 100) + '%'; } },
+    { key: 'pDown', label: 'P(drop)', num: true, fmt: function (r) { return Math.round(r.pDown * 100) + '%'; } },
+    { key: 'demand', label: 'Demand', fmt: function (r) { return esc(r.demand || '—'); }, val: function (r) { return DEMAND_RANK[r.demand] == null ? -1 : DEMAND_RANK[r.demand]; } },
+    { key: 'offeredNow', label: 'Available now', num: true, fmt: function (r) { return r.offeredNow; } },
+    { key: 'wantedNow', label: 'Wanted', num: true, fmt: function (r) { return r.wantedNow; } },
+    { key: 'marketConfidence', label: 'Evidence', fmt: function (r) { return confHTML(r.marketConfidence); } },
+    { key: 'flipScore', label: 'Flip score', num: true, fmt: function (r) { return r.flipScore.toFixed(3); } },
+    { key: 'subs', label: 'Other potion states → 30d', fmt: subsHTML }
+  ];
+  function renderInvest() {
+    var key = $('#iRank').value, vr = $('#iVar').value, minVal = +$('#iMinVal').value, minP = +$('#iMinP').value, dem = +$('#iDemand').value, n = +$('#iCount').value;
+    var rows = MODEL.predictions.filter(function (p) { return p.cat === 'Pets' && p.direction === 'up' && (!vr || p.variant === vr) && p.value >= minVal && p.pUp >= minP && (DEMAND_RANK[p.demand] || 0) >= dem; })
+      .map(function (p) { return Object.assign({}, p); });
+    rows.sort(function (a, b) { return b[key] - a[key] || b.expectedMove - a.expectedMove; });
+    rows.forEach(function (r, i) { r.rank = i + 1; });
+    $('#investCount').textContent = rows.length + ' pets qualify · showing top ' + Math.min(n, rows.length);
+    sortState.invest = { key: 'rank', dir: 'asc' };
+    renderTable($('#investTable'), 'invest', [
+      { key: 'rank', label: '#', num: true, fmt: function (r) { return '<b>' + r.rank + '</b>'; } },
+      { key: 'name', label: 'Pet', fmt: function (r) { return '<span title="' + esc(r.origin || '') + '">' + nameHTML(r.name) + varHTML(r) + '</span>'; } },
+      { key: 'tier', label: 'Tier', fmt: function (r) { return tierHTML(r.tier); }, val: function (r) { return AMVGGEngine.TIER_ORDER[r.tier]; } },
+      { key: 'value', label: 'Buy at', num: true, fmt: function (r) { return fmtVal(r.value); } },
+      { key: 'predicted', label: 'Target 30d', num: true, fmt: function (r) { return '<b>' + fmtVal(r.predicted) + '</b>'; } },
+      { key: 'expectedMove', label: 'Potential', num: true, fmt: function (r) { return moveHTML(r.expectedMove, 'up'); } },
+      { key: 'gainAbs', label: 'Value gained', num: true, fmt: function (r) { return '+' + fmtVal(r.gainAbs); } },
+      { key: 'pUp', label: 'Odds', num: true, fmt: function (r) { return Math.round(r.pUp * 100) + '%'; } },
+      { key: 'pDown', label: 'Risk of drop', num: true, fmt: function (r) { return Math.round(r.pDown * 100) + '%'; } },
+      { key: 'demand', label: 'Demand', fmt: function (r) { return esc(r.demand || '—'); }, val: function (r) { return DEMAND_RANK[r.demand] == null ? -1 : DEMAND_RANK[r.demand]; } },
+      { key: 'offeredNow', label: 'Available now', num: true, fmt: function (r) { return r.offeredNow; } },
+      { key: 'marketConfidence', label: 'Evidence', fmt: function (r) { return confHTML(r.marketConfidence); } },
+      { key: 'subs', label: 'Other potion states → 30d', fmt: subsHTML }
+    ], rows, { sortKey: 'rank', sortDir: 'asc', limit: n });
+  }
+  function renderOpps() {
+    var minVal = +$('#oMinVal').value, minGain = +$('#oMinGain').value, minP = +$('#oMinP').value, dem = +$('#oDemand').value, vr = $('#oVar').value;
+    var flips = MODEL.predictions.filter(function (p) { return p.direction === 'up' && (!vr || p.variant === vr) && p.value >= minVal && p.expectedMove >= minGain && p.pUp >= minP && (DEMAND_RANK[p.demand] || 0) >= dem; });
+    $('#flipCount').textContent = flips.length + ' match the filters';
+    renderTable($('#flipTable'), 'flips', oppCols, flips, { sortKey: 'flipScore', limit: 60 });
+    var big = MODEL.predictions.filter(function (p) { return p.direction === 'up' && p.value >= 0.01 && p.pUp >= 0.5; });
+    renderTable($('#bigRiseTable'), 'bigrise', [oppCols[0], oppCols[2], oppCols[3], oppCols[4], oppCols[6], oppCols[8], oppCols[11]], big, { sortKey: 'expectedMove', limit: 25 });
+    var dumps = MODEL.predictions.filter(function (p) { return p.direction === 'down' && p.value >= 0.01; });
+    renderTable($('#dumpTable'), 'dumps', [
+      oppCols[0], oppCols[2], oppCols[3],
+      { key: 'expectedMove', label: 'Expected', num: true, fmt: function (r) { return moveHTML(r.expectedMove, r.direction); } },
+      { key: 'pDown', label: 'P(drop)', num: true, fmt: function (r) { return Math.round(r.pDown * 100) + '%'; } },
+      { key: 'wantedNow', label: 'Wanted now', num: true, fmt: function (r) { return r.wantedNow; } },
+      oppCols[11]
+    ], dumps, { sortKey: 'dumpScore', limit: 25 });
+  }
+  function renderExplorer(name, tierIdx) {
+    var ex = MODEL.explorer(name); var el = $('#explorer');
+    if (!ex) { el.innerHTML = '<p class="empty">No item called “' + esc(name) + '”.</p>'; return; }
+    $('#search').value = name; var it = ex.item, isPet = it.cat === 'Pets';
+    var ti = Math.min(tierIdx || 0, ex.tiers.length - 1), tr = ex.tiers[ti], p = tr.prediction; currentExplorer = { name: name, ti: ti };
+    var h = '<div class="panel"><div class="explorer-head"><h2>' + esc(it.name) + '</h2>' + tierHTML(p ? p.tier : AMVGGEngine.tierOf(isPet ? it.values.fr : it.values.v)) + '<span class="chip">' + esc(it.cat) + '</span>' + (it.origin ? '<span class="origin">' + esc(it.origin) + '</span>' : '') + '</div>';
+    if (isPet) h += '<div class="tierbar">' + ex.tiers.map(function (t, i) { var pp = t.prediction; return '<button type="button" class="tierbtn' + (i === ti ? ' active' : '') + '" data-ti="' + i + '">' + esc(t.label) + ' <span class="muted">' + fmtVal(it.values[t.field]) + '</span>' + (pp ? dirHTML(pp.direction) : '') + '</button>'; }).join('') + '</div>';
+    if (p) {
+      h += '<div class="kv"><div><div class="k">Listed' + (isPet ? ' (' + esc(AMVGGEngine.VARIANT_LABEL[p.variantField]) + ')' : '') + '</div><div class="v">' + fmtVal(p.value) + '</div></div><div><div class="k">Expected in 30d</div><div class="v">' + fmtVal(p.predicted) + '</div></div><div><div class="k">Call</div><div class="v">' + dirHTML(p.direction) + '</div></div><div><div class="k">Expected move</div><div class="v">' + moveHTML(p.expectedMove, p.direction) + '</div></div><div><div class="k">P(up) / P(down)</div><div class="v">' + Math.round(p.pUp * 100) + '% / ' + Math.round(p.pDown * 100) + '%</div></div><div><div class="k">Market evidence</div><div class="v">' + confHTML(p.marketConfidence) + ' <span style="font-size:14px">' + Math.round(p.marketConfidence * 100) + '%</span></div></div></div>';
+      if (isPet) {
+        h += '<h3>' + esc(tr.label) + ' potion states</h3><div class="table-wrap"><table class="grid"><thead><tr><th>State</th><th class="num">Listed</th><th class="num">Expected 30d</th><th class="num">Move</th></tr></thead><tbody>' + p.subs.map(function (s) { return '<tr><td>' + esc(s.label) + '</td><td class="num">' + fmtVal(s.value) + '</td><td class="num"><b>' + fmtVal(s.predicted) + '</b></td><td class="num">' + moveHTML(p.expectedMove, p.direction) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+        h += '<p class="muted">Demand ' + esc(p.demand || '—') + ' · other tiers: ' + ex.tiers.filter(function (t, i) { return i !== ti && t.prediction; }).map(function (t) { var q = t.prediction; return esc(t.label) + ' ' + fmtVal(q.value) + ' → ' + fmtVal(q.predicted) + ' (' + fmtPct(q.expectedMove) + ')'; }).join(' · ') + '</p>';
+      } else h += '<p class="muted">Demand ' + esc(p.demand || '—') + '</p>';
+      h += '<h3>Why</h3><ul class="reasons">' + p.reasons.map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('') + '</ul>';
+      h += '<p class="muted">History layer expects ' + fmtPct(p.eHist) + '; market layer expects ' + fmtPct(p.eMarket) + ' and carries ' + Math.round(p.marketWeight * 100) + '% of the blend.</p>';
+    }
+    h += '<h3 style="margin-top:14px">Value history (' + esc(isPet ? AMVGGEngine.VARIANT_LABEL[tr.field] : 'value') + ')</h3><div class="chart-wrap" id="histChart"></div><div class="legend"><span>listed value</span><span class="rise">projected raise</span><span class="fall">projected lower</span></div></div>';
+    h += '<div class="two-col" style="margin-top:16px"><div class="panel"><h3>' + esc(tr.label) + ' update log <span class="count">' + tr.updates.length + ' changes</span></h3><div class="table-wrap" id="updTable"></div></div><div class="panel"><h3>Completed trades involving it <span class="count">' + (ex.market ? ex.market.trades.length : 0) + '</span></h3><div class="table-wrap" id="tradeTable"></div></div></div>';
+    if (ex.market) { var m = ex.market; h += '<div class="panel" style="margin-top:16px"><h3>Live market</h3><div class="kv"><div><div class="k">Offered in listings</div><div class="v">' + m.offers + '</div></div><div><div class="k">Wanted in listings</div><div class="v">' + m.wants + '</div></div><div><div class="k">Overpay (avg)</div><div class="v">' + (m.overpayMean == null ? '—' : fmtPct(m.overpayMean)) + '</div></div><div><div class="k">Trade sides priced</div><div class="v">' + m.overpayN + '</div></div><div><div class="k">Pressure z</div><div class="v">' + (m.pressure >= 0 ? '+' : '') + m.pressure.toFixed(2) + '</div></div></div>' + (ex.implied.length ? '<p>Market-implied values: ' + ex.implied.map(function (r) { return '<b>' + esc(AMVGGEngine.VARIANT_LABEL[r.variant] || 'value') + '</b> ' + fmtVal(r.implied) + ' vs listed ' + fmtVal(r.listed) + ' (' + fmtPct(r.gap) + ', ' + r.n + ' trades)'; }).join(' · ') + '</p>' : '') + '</div>'; }
+    el.innerHTML = h;
+    stepChart($('#histChart'), tr.series, p, MODEL.ctx.now);
+    renderTable($('#updTable'), 'upd', [
+      { key: 't', label: 'Date', fmt: function (r) { return fmtDate(r.t); } },
+      { key: 'prev', label: 'From', num: true, fmt: function (r) { return fmtVal(r.prev); } },
+      { key: 'new', label: 'To', num: true, fmt: function (r) { return fmtVal(r.new); } },
+      { key: 'chg', label: 'Change', num: true, fmt: function (r) { return moveHTML(r.new / r.prev - 1); }, val: function (r) { return r.new / r.prev - 1; } }
+    ], tr.updates, { sortKey: 't' });
+    var trades = ex.market ? ex.market.trades : [];
+    renderTable($('#tradeTable'), 'trades', [
+      { key: 't', label: 'Date', fmt: function (r) { return fmtDate(r.t); } },
+      { key: 'side', label: 'It was', fmt: function (r) { return esc(r.side); } },
+      { key: 'offering', label: 'Offered', fmt: function (r) { return esc(r.offering.join(', ')) + ' <span class="muted">(' + fmtVal(r.offTotal) + ')</span>'; } },
+      { key: 'lookingFor', label: 'For', fmt: function (r) { return esc(r.lookingFor.join(', ')) + ' <span class="muted">(' + fmtVal(r.lfTotal) + ')</span>'; } },
+      { key: 'r', label: 'Poster paid', num: true, fmt: function (r) { return moveHTML(Math.exp(r.r) - 1); }, val: function (r) { return r.r; } }
+    ], trades, { sortKey: 't' });
+  }
+  function renderMarket() {
+    var min = +$('#mMin').value || 1, lim = +$('#mLimit').value, minSides = +$('#mSides').value || 0;
+    var rows = []; MODEL.market.signals.forEach(function (s) { if (s.activity >= min && s.overpayN >= minSides) rows.push(s); });
+    renderTable($('#marketTable'), 'market', [
+      { key: 'name', label: 'Item', fmt: function (r) { return nameHTML(r.name); } },
+      { key: 'offers', label: 'Offered', num: true, fmt: function (r) { return r.offers; } },
+      { key: 'wants', label: 'Wanted', num: true, fmt: function (r) { return r.wants; } },
+      { key: 'wantRatio', label: 'Want/offer', num: true, fmt: function (r) { return Math.exp(r.wantRatio).toFixed(2) + '×'; } },
+      { key: 'overpayMean', label: 'Overpay avg', num: true, fmt: function (r) { return r.overpayMean == null ? '<span class="muted">—</span>' : moveHTML(r.overpayMean); } },
+      { key: 'overpayN', label: 'Trade sides', num: true, fmt: function (r) { return r.overpayN; } },
+      { key: 'askAdj', label: 'Ask premium', num: true, fmt: function (r) { return r.askN ? moveHTML(r.askAdj) : '<span class="muted">—</span>'; } },
+      { key: 'pressure', label: 'Pressure z', num: true, fmt: function (r) { return (r.pressure >= 0 ? '+' : '') + r.pressure.toFixed(2); } },
+      { key: 'confidence', label: 'Confidence', fmt: function (r) { return confHTML(r.confidence); } },
+      { key: 'strength', label: 'Strength', num: true, fmt: function (r) { var c = r.strength > 0.15 ? 'up' : r.strength < -0.15 ? 'down' : 'flat'; return '<span class="move ' + c + '">' + (c === 'up' ? '▲ ' : c === 'down' ? '▼ ' : '● ') + (r.strength >= 0 ? '+' : '−') + Math.abs(r.strength).toFixed(2) + '</span>'; } }
+    ], rows, { sortKey: 'strength', limit: lim });
+    renderTable($('#impliedTable'), 'implied', [
+      { key: 'name', label: 'Item', fmt: function (r) { return nameHTML(r.name) + ' <span class="chip">' + esc(AMVGGEngine.VARIANT_LABEL[r.variant] || 'value') + '</span>'; } },
+      { key: 'listed', label: 'Listed', num: true, fmt: function (r) { return fmtVal(r.listed); } },
+      { key: 'implied', label: 'Implied', num: true, fmt: function (r) { return '<b>' + fmtVal(r.implied) + '</b>'; } },
+      { key: 'gap', label: 'Gap', num: true, fmt: function (r) { return moveHTML(r.gap); } },
+      { key: 'n', label: 'Trades', num: true, fmt: function (r) { return r.n; } }
+    ], MODEL.implied.results.filter(function (r) { return r.n >= 3; }), { sortKey: 'gap', limit: 150 });
+    var u = MODEL.market.unknownNames; $('#unknownNames').textContent = u.length ? u.slice(0, 40).map(function (x) { return x.name + ' (' + x.count + ')'; }).join(' · ') : 'none';
+  }
+  function renderBacktest() {
+    var h = MODEL.history, el = $('#backtest');
+    if (!h.ok) { el.innerHTML = '<div class="note warn">The history model could not be trained: ' + esc(h.reason) + '. More update history is needed.</div>'; return; }
+    var m = h.metrics;
+    var html = '<div class="stat-strip">' + [
+      ['Accuracy', Math.round(m.accuracy * 100) + '%', 'on ' + h.nTest.toLocaleString() + ' held-out item-weeks'],
+      ['Always “hold”', Math.round(m.majorityBaseline * 100) + '%', 'majority-class baseline'],
+      ['Momentum rule', Math.round(m.momentumBaseline * 100) + '%', 'repeat the last move if < 14 days old'],
+      ['Precision, top 50 “up”', Math.round(m.precUp50.prec * 100) + '%', m.precUp50.hit + ' of ' + m.precUp50.k + ' actually rose'],
+      ['Precision, top 50 “down”', Math.round(m.precDown50.prec * 100) + '%', m.precDown50.hit + ' of ' + m.precDown50.k + ' actually fell'],
+      ['Base rate up / down', Math.round(h.baseRates.up * 100) + '% / ' + Math.round(h.baseRates.down * 100) + '%', 'share of item-weeks that moved']
+    ].map(function (t) { return '<div class="stat"><div class="label">' + t[0] + '</div><div class="num">' + t[1] + '</div><div class="hint">' + t[2] + '</div></div>'; }).join('') + '</div>';
+    html += '<p class="status">Training rows: ' + h.nTrain.toLocaleString() + ' item-weeks from ' + h.firstAsOf + '; test rows: ' + h.nTest.toLocaleString() + ' from ' + h.splitDate + ' to ' + h.lastAsOf + ' (each row asks what happened in the following ' + h.horizonDays + ' days). Macro-F1 ' + m.macroF1.toFixed(2) + ' · F1 up ' + m.f1Up.toFixed(2) + ' · F1 down ' + m.f1Down.toFixed(2) + ' · precision top-100 up ' + Math.round(m.precUp100.prec * 100) + '%, down ' + Math.round(m.precDown100.prec * 100) + '%.</p><div class="note">On raw accuracy the model roughly ties a simple momentum rule, because in most item-weeks nothing happens. Its value is in the ranking and the calibrated probabilities: the top-50 “up” list beats the ' + Math.round(h.baseRates.up * 100) + '% base rate several times over. Drops are rarer and less predictable from history alone, which is where the market layer helps.</div>';
+    html += '<div class="two-col"><div class="panel"><h3>Confusion matrix (test)</h3><table class="confusion"><tr><th></th><th>pred hold</th><th>pred up</th><th>pred down</th></tr>' + ['hold', 'up', 'down'].map(function (lbl, i) { return '<tr><th>actual ' + lbl + '</th>' + h.confusion[i].map(function (c, j) { return '<td class="' + (i === j ? 'diag' : '') + '">' + c + '</td>'; }).join('') + '</tr>'; }).join('') + '</table><p class="muted" style="margin-top:8px">Rows are what the Value Board actually did within 30 days; columns are the model’s most likely class. Because most items sit still, the interesting numbers are the up/down rows.</p></div>';
+    html += '<div class="panel"><h3>Calibration of P(up)</h3><div id="calibChart"></div><div class="legend"><span>predicted P(up)</span><span class="obs">observed share that rose</span></div><p class="muted">Bars that match mean the probabilities can be trusted at face value.</p></div></div>';
+    html += '<div class="panel" style="margin-top:16px"><h3>What drives the calls</h3><p class="muted">Standardised weights of each history feature toward “up” (green, right) and “down” (red, left) relative to “hold”. Larger bars matter more.</p><div class="two-col"><div><h3 style="font-size:13px;color:var(--ink-2)">toward up</h3><div id="wUp"></div></div><div><h3 style="font-size:13px;color:var(--ink-2)">toward down</h3><div id="wDown"></div></div></div></div>';
+    html += '<div class="panel" style="margin-top:16px"><h3>Typical size of a 30-day move (training data)</h3><p class="muted">The engine uses the median (capped at ±25%) so a few extreme drops do not inflate every call; the mean is shown for comparison.</p><div class="table-wrap"><table class="grid"><thead><tr><th>Tier</th><th class="num">Median raise</th><th class="num">Mean raise</th><th class="num">n</th><th class="num">Median drop</th><th class="num">Mean drop</th><th class="num">n</th></tr></thead><tbody>' + ['high', 'highmid', 'mid', 'low', 'insignificant'].map(function (t) { var mv = h.moves[t]; return '<tr><td>' + TIER_LABEL[t] + '</td><td class="num">' + fmtPct(Math.exp(mv.up) - 1) + '</td><td class="num muted">' + (mv.meanUp == null ? '—' : fmtPct(Math.exp(mv.meanUp) - 1)) + '</td><td class="num">' + mv.nUp + '</td><td class="num">' + fmtPct(Math.exp(mv.down) - 1) + '</td><td class="num muted">' + (mv.meanDown == null ? '—' : fmtPct(Math.exp(mv.meanDown) - 1)) + '</td><td class="num">' + mv.nDown + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+    html += '<div class="note warn" style="margin-top:16px"><b>What this backtest cannot tell you.</b> Only the history layer is backtested, because listings and completed trades exist only as a snapshot of today. Once the collector has run daily for a few weeks, the same test can be run on the market layer, and the blend weights should be fitted rather than set by hand.</div>';
+    el.innerHTML = html;
+    barPairs($('#calibChart'), h.calibration.filter(function (c) { return c.n > 0; }).map(function (c) { return { label: c.range, a: c.meanP, b: c.observed, n: c.n }; }), { aLabel: 'predicted', bLabel: 'observed' });
+    hbar($('#wUp'), h.weights.map(function (w) { return { label: w.feature, v: w.up }; }));
+    hbar($('#wDown'), h.weights.map(function (w) { return { label: w.feature, v: w.down }; }));
+  }
+  function renderMethod() {
+    $('#method').innerHTML = [
+      '<h3>1. History layer</h3><p>The update log is replayed to reconstruct every item’s value on every day since the switch to baseless values. Pets are tracked as three separate series, Regular (FR), Neon (NFR) and Mega (MFR), each with its own features, prediction and call; the potion states inside a tier (no potion, F, R, FR and their N/M equivalents) are priced from today’s values and move with their tier, since the board adjusts them together. Once a week, for every series, the engine looks only at what was known that day: current value, 7/30/90-day change, how many updates happened, days since the last one, the direction and streak of recent moves, demand, category, and whether the neon or mega variants of the same pet moved. The label is what the Value Board did in the following 30 days: raised, lowered, or left it (a 2% band counts as “left”).</p><p>A three-class softmax regression is trained on the earlier weeks and tested on the most recent ones (the Backtest tab). It is then refitted on everything and run on today’s features. The expected size of a move is the average raise or drop seen in that item’s tier.</p>',
+      '<h3>2. Market layer</h3><p>Every active listing and completed trade is priced with today’s values, variant by variant (FR, NFR, MFR and the no-potion variants for pets, plain values for items; sign entries such as “Add 0.25” are priced at their stated value, others make a trade unpriceable). For a completed trade the poster gave the <em>offering</em> side and received the <em>looking-for</em> side, so the log-ratio of the two totals says how much they overpaid. That premium is attributed to each item in proportion to its share of its side: items people overpay to receive read as undervalued, items people accept less for read as overvalued.</p><p>Contributions are weighted by the poster’s completed-trade count (reputation), decay with age, and are capped at three per trader per item so no single account can pump a pet. Listings give a weaker “ask premium” signal. Want-to-offer ratio, overpay and ask premium are z-scored and combined into a pressure score; confidence grows with the number of priced trade sides.</p>',
+      '<h3>3. Implied values</h3><p>Completed trades are also solved jointly: each is an equation saying the two sides balance, the unknowns are the log-values of items with at least two trades, a Huber loss ignores wild outliers, and a ridge penalty anchors everything to the listed values so gaps appear only where trades disagree with the list. The result is a market-implied value per item variant with a trade count.</p>',
+      '<h3>4. The blend</h3><p>Expected move = history expectation blended with the market expectation, where the market’s share of the blend is 55% × its confidence. An implied-value gap (≥ 3 trades) drives the market expectation directly; otherwise the pressure score does, gently. A move beyond ±2% becomes a raise or lower call. Score = |expected move| × (0.5 + 0.5 × class probability) × (0.6 + 0.4 × market confidence), which is what the alert tables sort by.</p>',
+      '<h3>Known limits</h3><ul><li>Demand is today’s demand, not the demand at each historical date (the log only records demand changes for some items).</li><li>Completed trades come from the profiles of recent posters, so the sample favours active traders.</li><li>The market layer is not yet backtested (needs daily snapshots).</li><li>Values before 24 March 2026 are on a different scale and are excluded.</li></ul>'
+    ].join('');
+    $('#integrate').innerHTML = [
+      '<h3>Files</h3><ul><li><code>engine.js</code> — the whole model; exposes <code>AMVGGEngine.build(data)</code> and works in the browser or Node (<code>module.exports</code>).</li><li><code>build/collect.sh</code> + <code>build/rsc_extract.pl</code> + <code>build/build_data.pl</code> — the collector that produced this snapshot from the public site (rate-limited to one API call every 2.5 s).</li><li><code>data.json</code> — the snapshot this page runs on.</li></ul>',
+      '<h3>Inside the Next.js app</h3><p>Skip the collector entirely and feed the engine from the database. The shapes it expects are exactly what the site already serves:</p><pre>' + esc('// app/api/cron/predict/route.ts\nimport { build } from "@/lib/engine";          // engine.js, unchanged\n\nexport async function GET() {\n  const data = {\n    meta: { collectedAt: new Date().toISOString() },\n    items:     await db.items.find().toArray(),        // name, cat, origin, values{fr,r,f,np,nfr,nr,nf,n,mfr,mr,mf,m}|{v}, demand{}, lastUpdatedAt\n    updates:   await db.valueUpdates.find({ updatedAt: { $gte: since } }).toArray(), // t, item, cat, var (v|nfr|mfr), prev, new\n    listings:  await db.trades.find({ status: "listed" }).toArray(),     // t, uid, offering[], lookingFor[]\n    completed: await db.trades.find({ completed: true, publishedAt: { $gte: since90 } }).toArray(),\n    profiles:  await db.users.find({}, { projection: { completed: 1 } }).toArray(),\n  };\n  const model = build(data);\n  await db.predictions.replaceOne({ _id: "latest" }, { at: data.meta.collectedAt, predictions: model.predictions, backtest: model.history.metrics }, { upsert: true });\n  return Response.json({ ok: true, raise: model.summary.raise, lower: model.summary.lower });\n}') + '</pre><p>Schedule it hourly (DigitalOcean App Platform job or Vercel cron) and read <code>predictions.latest</code> from the Value Board dashboard or a public “trend” badge on pet pages.</p>',
+      '<h3>Better data, better model</h3><ul><li>Store a daily value snapshot per item (or keep the update log complete, which it already is) — that is what the history layer trains on.</li><li>Log <code>acceptTrade</code>, <code>markAsCompleted</code> and <code>markAsFailed</code> with timestamps: time-to-accept and failure rate are liquidity signals the public site does not expose.</li><li>Log calculator sessions and pet-page views server-side; attention precedes board moves.</li><li>After 4–6 weeks of stored daily model outputs, replace the hand-set blend (55% × confidence) with a fitted weight from the same backtest harness.</li></ul>',
+      '<h3>Refreshing this page</h3><pre>' + esc('cd build\nbash collect.sh            # ~20 min, resumable, respects the rate limit\nperl build_data.pl ../site/data.json\n# then republish index.html + engine.js + data.json') + '</pre>'
+    ].join('');
+  }
+
+  /* ---------- routing & wiring ---------- */
+  function route() {
+    var hash = (location.hash || '#overview').slice(1).split('/')[0];
+    document.querySelectorAll('section.view').forEach(function (s) { s.classList.toggle('active', s.id === 'view-' + hash); });
+    document.querySelectorAll('nav.tabs a').forEach(function (a) { a.classList.toggle('active', a.getAttribute('href') === '#' + hash); });
+    if (!document.querySelector('section.view.active')) { $('#view-overview').classList.add('active'); }
+  }
+  window.addEventListener('hashchange', route);
+  document.addEventListener('click', function (ev) { var a = ev.target.closest('a.name'); if (a && MODEL) { renderExplorer(a.getAttribute('data-name')); return; } var b = ev.target.closest('button.tierbtn'); if (b && MODEL && currentExplorer) renderExplorer(currentExplorer.name, +b.getAttribute('data-ti')); });
+  ['fDir', 'fVar', 'fCat', 'fTier', 'fMarket', 'fLimit'].forEach(function (id) { document.getElementById(id).addEventListener('change', function () { if (MODEL) renderAlerts(); }); });
+  ['iRank', 'iVar', 'iMinVal', 'iMinP', 'iDemand', 'iCount'].forEach(function (id) { document.getElementById(id).addEventListener('change', function () { if (MODEL) renderInvest(); }); });
+  ['oVar', 'oMinVal', 'oMinGain', 'oMinP', 'oDemand'].forEach(function (id) { document.getElementById(id).addEventListener('change', function () { if (MODEL) renderOpps(); }); });
+  ['mMin', 'mSides', 'mLimit'].forEach(function (id) { document.getElementById(id).addEventListener('change', function () { if (MODEL) renderMarket(); }); });
+  $('#search').addEventListener('change', function () { if (MODEL && MODEL.ctx.byName.has(this.value)) renderExplorer(this.value); });
+  $('#search').addEventListener('keydown', function (ev) { if (ev.key === 'Enter' && MODEL) { var q = this.value.toLowerCase(), hit = DATA.items.find(function (it) { return it.name.toLowerCase() === q; }) || DATA.items.find(function (it) { return it.name.toLowerCase().indexOf(q) === 0; }) || DATA.items.find(function (it) { return it.name.toLowerCase().indexOf(q) >= 0; }); if (hit) renderExplorer(hit.name); } });
+
+  function renderAll() {
+    renderStats(); renderOverview(); renderInvest(); renderOpps(); renderAlerts(); renderMarket(); renderBacktest(); renderMethod();
+    var top = MODEL.predictions[0]; if (top) renderExplorer(top.name);
+    $('#metaLine').textContent = 'snapshot ' + DATA.meta.collectedAt.replace('T', ' ').slice(0, 16) + ' UTC · ' + DATA.meta.counts.items + ' items · ' + DATA.meta.counts.updates + ' update rows';
+  }
+  fetch('data.json').then(function (r) { return r.json(); }).then(function (d) {
+    DATA = d; renderStats(); route();
+    var cats = Array.from(new Set(d.items.map(function (i) { return i.cat; }))); $('#fCat').innerHTML = '<option value="">all</option>' + cats.map(function (c) { return '<option>' + esc(c) + '</option>'; }).join('');
+    $('#itemNames').innerHTML = d.items.map(function (i) { return '<option value="' + esc(i.name) + '">'; }).join('');
+    $('#metaLine').textContent = 'snapshot ' + d.meta.collectedAt.replace('T', ' ').slice(0, 16) + ' UTC · building model…';
+    setTimeout(function () { try { MODEL = AMVGGEngine.build(d); renderAll(); } catch (e) { $('#buildStatus').innerHTML = '<span class="move down">Model build failed:</span> ' + esc(e.message); console.error(e); } }, 40);
+  }).catch(function (e) { $('#buildStatus').textContent = 'Could not load data.json: ' + e.message; });
+})();
+</script>

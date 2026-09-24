@@ -1,0 +1,6 @@
+build/raw/
+build/raw_*/
+build/collect.out
+state/
+site/data.json
+*.log
