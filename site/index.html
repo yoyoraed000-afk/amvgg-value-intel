@@ -162,7 +162,7 @@
   </section>
 
   <section class="view" id="view-opportunities">
-    <div class="section-head"><div><h2>Opportunities</h2><p class="lede">Pets and items worth trading into now: the expected gain over 30 days, the odds the Value Board actually raises it, whether traders want it, and how many were offered in the last 48 hours. Then the ones to move out of before they drop.</p></div></div>
+    <div class="section-head"><div><h2>Opportunities</h2><p class="lede">Pets and items worth trading into now: the expected gain over 30 days, the odds the Value Board actually raises it, whether traders want it, and how many were offered recently. Then the ones to move out of before they drop.</p></div></div>
     <div class="controls">
       <label>Variant <select id="oVar"><option value="">all</option><option>Regular</option><option>Neon</option><option>Mega</option></select></label>
       <label>Min value <select id="oMinVal"><option value="0.01">0.01 (low tier and up)</option><option value="0.03" selected>0.03 (mid tier and up)</option><option value="0.1">0.1 (high-mid and up)</option><option value="0.45">0.45 (high only)</option></select></label>
@@ -228,7 +228,7 @@
 (function () {
   'use strict';
   var $ = function (s) { return document.querySelector(s); };
-  var DATA = null, MODEL = null;
+  var DATA = null, MODEL = null, LW = 48;
   var TIER_LABEL = { high: 'High', highmid: 'High-mid', mid: 'Mid', low: 'Low', insignificant: 'Insig.', unknown: '?' };
   function fmtVal(v) { if (v == null || !isFinite(v)) return '—'; var r = AMVGGEngine.roundValue(v); return String(r); }
   function fmtPct(x, d) { if (x == null || !isFinite(x)) return '—'; return (x >= 0 ? '+' : '−') + (Math.abs(x) * 100).toFixed(d == null ? 1 : d) + '%'; }
@@ -354,7 +354,7 @@
     { key: 'pUp', label: 'P(rise)', num: true, fmt: function (r) { return Math.round(r.pUp * 100) + '%'; } },
     { key: 'pDown', label: 'P(drop)', num: true, fmt: function (r) { return Math.round(r.pDown * 100) + '%'; } },
     { key: 'demand', label: 'Demand', fmt: function (r) { return esc(r.demand || '—'); }, val: function (r) { return DEMAND_RANK[r.demand] == null ? -1 : DEMAND_RANK[r.demand]; } },
-    { key: 'offeredNow', label: 'Offered (48h)', num: true, fmt: function (r) { return r.offeredNow; } },
+    { key: 'offeredNow', label: 'Offered (' + LW + 'h)', num: true, fmt: function (r) { return r.offeredNow; } },
     { key: 'wantedNow', label: 'Wanted', num: true, fmt: function (r) { return r.wantedNow; } },
     { key: 'marketConfidence', label: 'Evidence', fmt: function (r) { return confHTML(r.marketConfidence); } },
     { key: 'flipScore', label: 'Flip score', num: true, fmt: function (r) { return r.flipScore.toFixed(3); } },
@@ -379,7 +379,7 @@
       { key: 'pUp', label: 'Odds', num: true, fmt: function (r) { return Math.round(r.pUp * 100) + '%'; } },
       { key: 'pDown', label: 'Risk of drop', num: true, fmt: function (r) { return Math.round(r.pDown * 100) + '%'; } },
       { key: 'demand', label: 'Demand', fmt: function (r) { return esc(r.demand || '—'); }, val: function (r) { return DEMAND_RANK[r.demand] == null ? -1 : DEMAND_RANK[r.demand]; } },
-      { key: 'offeredNow', label: 'Offered (48h)', num: true, fmt: function (r) { return r.offeredNow; } },
+      { key: 'offeredNow', label: 'Offered (' + LW + 'h)', num: true, fmt: function (r) { return r.offeredNow; } },
       { key: 'marketConfidence', label: 'Evidence', fmt: function (r) { return confHTML(r.marketConfidence); } },
       { key: 'subs', label: 'Other potion states → 30d', fmt: subsHTML }
     ], rows, { sortKey: 'rank', sortDir: 'asc', limit: n });
@@ -521,7 +521,7 @@
     $('#metaLine').textContent = 'snapshot ' + DATA.meta.collectedAt.replace('T', ' ').slice(0, 16) + ' UTC · ' + DATA.meta.counts.items + ' items · ' + DATA.meta.counts.updates + ' update rows';
   }
   fetch('data.json').then(function (r) { return r.json(); }).then(function (d) {
-    DATA = d; renderStats(); route();
+    DATA = d; LW = d.meta.listingWindowHours || 48; oppCols.forEach(function (c) { if (c.key === 'offeredNow') c.label = 'Offered (' + LW + 'h)'; }); renderStats(); route();
     var cats = Array.from(new Set(d.items.map(function (i) { return i.cat; }))); $('#fCat').innerHTML = '<option value="">all</option>' + cats.map(function (c) { return '<option>' + esc(c) + '</option>'; }).join('');
     $('#itemNames').innerHTML = d.items.map(function (i) { return '<option value="' + esc(i.name) + '">'; }).join('');
     $('#metaLine').textContent = 'snapshot ' + d.meta.collectedAt.replace('T', ' ').slice(0, 16) + ' UTC · building model…';

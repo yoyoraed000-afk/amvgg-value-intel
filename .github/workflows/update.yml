@@ -37,7 +37,7 @@ jobs:
 
       - name: Collect new data from amvgg.com
         env:
-          FULL: ${{ (github.event_name == 'schedule' && github.event.schedule == '23 3 * * *') || (github.event_name == 'workflow_dispatch' && inputs.full) && '1' || '0' }}
+          FULL: ${{ ((github.event_name == 'schedule' && github.event.schedule == '23 3 * * *') || (github.event_name == 'workflow_dispatch' && inputs.full)) && '1' || '0' }}
         run: |
           echo "FULL=$FULL"
           bash build/collect_incremental.sh

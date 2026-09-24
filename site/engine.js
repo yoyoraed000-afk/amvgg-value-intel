@@ -272,7 +272,7 @@
         if (f.chg90 && Math.abs(Math.exp(f.chg90) - 1) >= 0.05) reasons.push('90-day change ' + fmtPct(Math.exp(f.chg90) - 1));
         if (s) {
           if (s.overpayN >= 3) reasons.push((s.overpayMean > 0 ? 'Overpaid' : 'Underpaid') + ' in completed trades (all tiers): avg ' + fmtPct(s.overpayMean) + ' across ' + s.overpayN + ' trade sides');
-          if (offeredNow + wantedNow >= 5) reasons.push((T.label || 'Item') + ' wanted ' + wantedNow + '× vs offered ' + offeredNow + '× in listings (last 48h)');
+          if (offeredNow + wantedNow >= 5) reasons.push((T.label || 'Item') + ' wanted ' + wantedNow + '× vs offered ' + offeredNow + '× in listings (last ' + (ctx.listingWindowHours || 48) + 'h)');
           if (s.askN >= 5 && Math.abs(s.askAdj) >= 0.02) reasons.push('Traders ' + (s.askAdj > 0 ? 'offer above' : 'ask below') + ' its value when listing (' + fmtPct(s.askAdj) + ')');
         }
         if (imp && imp.n >= 3) reasons.push('Market-implied ' + (T.label ? T.label.toLowerCase() + ' ' : '') + 'value ' + roundValue(imp.implied) + ' vs listed ' + roundValue(imp.listed) + ' (' + fmtPct(imp.gap) + ', ' + imp.n + ' trades)');
@@ -308,7 +308,7 @@
     var series = buildHistory(data.updates);
     var now = Date.parse(data.meta.collectedAt) || Date.now();
     var firstT = data.updates.length ? Date.parse(data.updates[0].t) : now, lastT = data.updates.length ? Date.parse(data.updates[data.updates.length - 1].t) : now;
-    var ctx = { items: data.items, byName: idx.byName, series: series, valueAt: makeValueAt(series, idx.byName), now: now, histStart: Math.max(firstT, BASELESS_START), listings: data.listings, completed: data.completed, profiles: data.profiles || {} };
+    var ctx = { items: data.items, byName: idx.byName, series: series, valueAt: makeValueAt(series, idx.byName), now: now, histStart: Math.max(firstT, BASELESS_START), listings: data.listings, completed: data.completed, profiles: data.profiles || {}, listingWindowHours: data.meta.listingWindowHours || 48 };
     var hist = buildHistoryModel(ctx, { iters: options.iters || 400, lr: 0.5, lambda: 1e-3 });
     var market = buildMarket(ctx);
     var implied = solveImplied(ctx, {});

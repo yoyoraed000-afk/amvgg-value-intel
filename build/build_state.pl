@@ -6,7 +6,9 @@
 use strict; use warnings; use JSON::PP; use POSIX qw(strftime);
 my $dir = $0; $dir =~ s{[/\\][^/\\]+$}{}; $dir = '.' if $dir eq $0;
 my $root = "$dir/.."; my $raw = $ENV{RAW_DIR} || "$dir/raw"; my $state = $ENV{STATE_DIR} || "$root/state"; my $out = $ARGV[0] || $ENV{OUT} || "$root/site/data.json";
-my $LISTING_WINDOW_H = $ENV{LISTING_WINDOW_H} || 48; my $COMPLETED_WINDOW_D = $ENV{COMPLETED_WINDOW_D} || 60;
+# store windows (what the data branch keeps) and page windows (what site/data.json ships; the site posts ~6,400 listings an hour)
+my $LISTING_WINDOW_H = $ENV{LISTING_WINDOW_H} || 12; my $COMPLETED_WINDOW_D = $ENV{COMPLETED_WINDOW_D} || 60;
+my $DATA_LISTING_H = $ENV{DATA_LISTING_HOURS} || 6; my $DATA_COMPLETED_D = $ENV{DATA_COMPLETED_DAYS} || 30;
 mkdir $state unless -d $state;
 my $J = JSON::PP->new->canonical; my $now = time; my $nowIso = strftime('%Y-%m-%dT%H:%M:%SZ', gmtime($now));
 sub slurp { my $f = shift; open(my $h, '<:raw', $f) or return undef; local $/; my $s = <$h>; close $h; $s }
@@ -79,10 +81,11 @@ for my $u (@updRaw) {
     }
 }
 @updates = sort { $a->{t} cmp $b->{t} } @updates;
-my @listings = map { { id => $_->{id}, t => $_->{publishedAt}, uid => $_->{authorRobloxId}, user => $_->{authorName}, offering => norm_side($_->{offering}), lookingFor => norm_side($_->{lookingFor}) } } @lstRaw;
-my @completed = map { { id => $_->{id}, t => $_->{publishedAt}, uid => $_->{uid}, offering => norm_side($_->{offering}), lookingFor => norm_side($_->{lookingFor}) } } @cmpRaw;
+my $dlcut = iso_ago($DATA_LISTING_H * 3600); my $dccut = iso_ago($DATA_COMPLETED_D * 86400);
+my @listings = map { { id => $_->{id}, t => $_->{publishedAt}, uid => $_->{authorRobloxId}, offering => norm_side($_->{offering}), lookingFor => norm_side($_->{lookingFor}) } } grep { ($_->{publishedAt} // '') ge $dlcut } @lstRaw;
+my @completed = map { { id => $_->{id}, t => $_->{publishedAt}, uid => $_->{uid}, offering => norm_side($_->{offering}), lookingFor => norm_side($_->{lookingFor}) } } grep { ($_->{publishedAt} // '') ge $dccut } @cmpRaw;
 my %prof = map { $_ => { map { $_ => $profiles->{$_}{$_} } grep { $_ ne 'fetchedAt' } keys %{$profiles->{$_}} } } keys %$profiles;
-my $meta = { collectedAt => $nowIso, listingWindowHours => $LISTING_WINDOW_H, completedWindowDays => $COMPLETED_WINDOW_D,
+my $meta = { collectedAt => $nowIso, listingWindowHours => $DATA_LISTING_H, completedWindowDays => $DATA_COMPLETED_D, storeListingHours => $LISTING_WINDOW_H, storeCompletedDays => $COMPLETED_WINDOW_D,
              counts => { items => scalar(@items), updates => scalar(@updates), listings => scalar(@listings), completed => scalar(@completed), profiles => scalar(keys %prof) },
              updatesFrom => (@updates ? $updates[0]{t} : undef), updatesTo => (@updates ? $updates[-1]{t} : undef) };
 save($out, { meta => $meta, items => \@items, updates => \@updates, listings => \@listings, completed => \@completed, profiles => \%prof });
