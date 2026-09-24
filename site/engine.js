@@ -272,7 +272,7 @@
         if (f.chg90 && Math.abs(Math.exp(f.chg90) - 1) >= 0.05) reasons.push('90-day change ' + fmtPct(Math.exp(f.chg90) - 1));
         if (s) {
           if (s.overpayN >= 3) reasons.push((s.overpayMean > 0 ? 'Overpaid' : 'Underpaid') + ' in completed trades (all tiers): avg ' + fmtPct(s.overpayMean) + ' across ' + s.overpayN + ' trade sides');
-          if (offeredNow + wantedNow >= 5) reasons.push((T.label || 'Item') + ' wanted ' + wantedNow + '× vs offered ' + offeredNow + '× in active listings');
+          if (offeredNow + wantedNow >= 5) reasons.push((T.label || 'Item') + ' wanted ' + wantedNow + '× vs offered ' + offeredNow + '× in listings (last 48h)');
           if (s.askN >= 5 && Math.abs(s.askAdj) >= 0.02) reasons.push('Traders ' + (s.askAdj > 0 ? 'offer above' : 'ask below') + ' its value when listing (' + fmtPct(s.askAdj) + ')');
         }
         if (imp && imp.n >= 3) reasons.push('Market-implied ' + (T.label ? T.label.toLowerCase() + ' ' : '') + 'value ' + roundValue(imp.implied) + ' vs listed ' + roundValue(imp.listed) + ' (' + fmtPct(imp.gap) + ', ' + imp.n + ' trades)');
