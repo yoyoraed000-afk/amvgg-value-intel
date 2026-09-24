@@ -333,6 +333,64 @@
     return { summary: summary, history: hist, market: market, implied: implied, predictions: preds, explorer: explorer, ctx: ctx, featureNames: FEATURE_NAMES, tierOf: tierOf, roundValue: roundValue, variantLabel: VARIANT_LABEL, petTiers: PET_TIERS };
   }
 
-  var api = { build: build, tierOf: tierOf, roundValue: roundValue, priceEntry: priceEntry, VARIANT_FIELD: VARIANT_FIELD, VARIANT_LABEL: VARIANT_LABEL, FEATURE_NAMES: FEATURE_NAMES, TIER_ORDER: TIER_ORDER };
+  /* ---------------- insights: descriptive statistics for the dashboard's Insights tab ---------------- */
+  function median(a) { if (!a.length) return null; var s = a.slice().sort(function (x, y) { return x - y; }); var m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+  function pct(a, q) { if (!a.length) return null; var s = a.slice().sort(function (x, y) { return x - y; }); return s[Math.min(s.length - 1, Math.floor(q * s.length))]; }
+  function inc(map, k, n) { map.set(k, (map.get(k) || 0) + (n == null ? 1 : n)); }
+  function top(map, n, min) { return Array.from(map.entries()).filter(function (e) { return e[1] >= (min || 0); }).sort(function (a, b) { return b[1] - a[1]; }).slice(0, n).map(function (e) { return { name: e[0], n: e[1] }; }); }
+  var WDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  function buildInsights(model) {
+    var ctx = model.ctx, byName = ctx.byName, now = ctx.now;
+    // ---- listings (recent window)
+    var posters = new Map(), offered = new Map(), wanted = new Map(), signs = new Map(), minT = Infinity, maxT = -Infinity, lHours = new Array(24).fill(0);
+    ctx.listings.forEach(function (l) { inc(posters, l.uid); var t = Date.parse(l.t); if (isFinite(t)) { if (t < minT) minT = t; if (t > maxT) maxT = t; lHours[new Date(t).getUTCHours()]++; } l.offering.forEach(function (e) { if (e.name) inc(offered, e.name); }); l.lookingFor.forEach(function (e) { if (e.name) inc(wanted, e.name); else if (e.sign) inc(signs, e.sign); }); });
+    var spanH = isFinite(minT) ? Math.max(0.25, (maxT - minT) / 3600000) : 1;
+    var perPoster = Array.from(posters.values()).sort(function (a, b) { return b - a; }), totalL = ctx.listings.length;
+    var top1 = perPoster.slice(0, Math.max(1, Math.ceil(perPoster.length * 0.01))).reduce(function (s, x) { return s + x; }, 0), top10 = perPoster.slice(0, Math.max(1, Math.ceil(perPoster.length * 0.1))).reduce(function (s, x) { return s + x; }, 0);
+    var ratio = []; offered.forEach(function (o, name) { var w = wanted.get(name) || 0; if (o + w >= 20) ratio.push({ name: name, offered: o, wanted: w, ratio: (w + 1) / (o + 1) }); }); wanted.forEach(function (w, name) { if (!offered.has(name) && w >= 20) ratio.push({ name: name, offered: 0, wanted: w, ratio: (w + 1) }); });
+    ratio.sort(function (a, b) { return b.ratio - a.ratio; });
+    // ---- completed trades
+    var traders = new Set(), sides = new Map(), itemsPerSide = [], totals = [], cHours = new Array(24).fill(0), cDays = new Array(7).fill(0), priced = 0, cMin = Infinity;
+    ctx.completed.forEach(function (c) { traders.add(c.uid); var t = Date.parse(c.t); if (isFinite(t)) { cHours[new Date(t).getUTCHours()]++; cDays[new Date(t).getUTCDay()]++; if (t < cMin) cMin = t; } itemsPerSide.push(c.offering.length, c.lookingFor.length); c.offering.concat(c.lookingFor).forEach(function (e) { if (e.name) inc(sides, e.name); }); var off = priceSide(c.offering, byName), lf = priceSide(c.lookingFor, byName); if (off.ok && lf.ok) { priced++; totals.push(Math.max(off.total, lf.total)); } });
+    var overpays = [], underpays = []; model.market.signals.forEach(function (s) { if (s.overpayN >= 8 && s.overpayMean != null) { (s.overpayMean > 0 ? overpays : underpays).push({ name: s.name, mean: s.overpayMean, n: s.overpayN }); } });
+    overpays.sort(function (a, b) { return b.mean - a.mean; }); underpays.sort(function (a, b) { return a.mean - b.mean; });
+    // ---- potion premiums and tier multipliers
+    var rF = [], rR = [], rFR = [], nMul = {}, mMul = {};
+    ctx.items.forEach(function (it) { if (it.cat !== 'Pets') return; var v = it.values; if (v.np > 0 && v.f > 0 && v.r > 0 && v.fr > 0) { rF.push(v.f / v.np); rR.push(v.r / v.np); rFR.push(v.fr / v.np); } var tr = tierOf(v.fr); if (v.fr > 0 && v.nfr > 0) { (nMul[tr] = nMul[tr] || []).push(v.nfr / v.fr); } if (v.nfr > 0 && v.mfr > 0) { (mMul[tr] = mMul[tr] || []).push(v.mfr / v.nfr); } });
+    var tiers = ['high', 'highmid', 'mid', 'low', 'insignificant'];
+    var multipliers = tiers.map(function (t) { return { tier: t, neonOverRegular: nMul[t] ? median(nMul[t]) : null, megaOverNeon: mMul[t] ? median(mMul[t]) : null, n: (nMul[t] || []).length }; });
+    // ---- Value Board activity (value changes only)
+    var weeks = new Map(), bHours = new Array(24).fill(0), bDays = new Array(7).fill(0), byCat = new Map(), perItem30 = new Map(), raiseSizes = {}, dropSizes = {}, lastUpd = new Map(), nUpd = 0;
+    ctx.series.forEach(function (arr, key) { var nm = key.split('|'), it = byName.get(nm[0]); var cat = it ? it.cat : 'Unknown';
+      arr.forEach(function (u) { if (u.t < ctx.histStart || u.prev === u.new || !(u.prev > 0)) return; nUpd++; var d = new Date(u.t); var wk = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - d.getUTCDay())).toISOString().slice(0, 10); inc(weeks, wk); bHours[d.getUTCHours()]++; bDays[d.getUTCDay()]++;
+        var c = byCat.get(cat) || { cat: cat, raises: 0, drops: 0 }; if (u.new > u.prev) c.raises++; else c.drops++; byCat.set(cat, c);
+        var tr = tierOf(u.prev), lr = Math.log(u.new / u.prev); (u.new > u.prev ? (raiseSizes[tr] = raiseSizes[tr] || []) : (dropSizes[tr] = dropSizes[tr] || [])).push(Math.abs(lr));
+        if (u.t > now - 30 * DAY && nm[1] === 'v') inc(perItem30, nm[0]);
+        if (nm[1] === 'v') { var prev = lastUpd.get(nm[0]); if (!prev || u.t > prev) lastUpd.set(nm[0], u.t); } }); });
+    var weekRows = Array.from(weeks.entries()).sort().map(function (e) { return { label: e[0], v: e[1] }; });
+    var stepSizes = tiers.map(function (t) { return { tier: t, raiseMedian: raiseSizes[t] ? median(raiseSizes[t]) : null, raiseP90: raiseSizes[t] ? pct(raiseSizes[t], 0.9) : null, nRaise: (raiseSizes[t] || []).length, dropMedian: dropSizes[t] ? median(dropSizes[t]) : null, dropP90: dropSizes[t] ? pct(dropSizes[t], 0.9) : null, nDrop: (dropSizes[t] || []).length }; });
+    var mostUpdated = top(perItem30, 15).map(function (r) { var p = model.predictions.find(function (q) { return q.name === r.name && q.variantVar === 'v'; }); return { name: r.name, n: r.n, chg30: p ? Math.exp(p.feat.chg30) - 1 : null, value: p ? p.value : null }; });
+    var regular = model.predictions.filter(function (p) { return p.variantVar === 'v' && p.value >= 0.01; });
+    function movers(field, dir, n) { return regular.filter(function (p) { return p.feat[field] && (dir > 0 ? p.feat[field] > 0 : p.feat[field] < 0); }).sort(function (a, b) { return dir > 0 ? b.feat[field] - a.feat[field] : a.feat[field] - b.feat[field]; }).slice(0, n).map(function (p) { return { name: p.name, cat: p.cat, value: p.value, change: Math.exp(p.feat[field]) - 1 }; }); }
+    var never = 0, stale90 = 0; ctx.items.forEach(function (it) { var t = lastUpd.get(it.name); if (!t) never++; else if (t < now - 90 * DAY) stale90++; });
+    // ---- model overview
+    var byTierVar = {}; model.predictions.forEach(function (p) { var k = p.tier + '|' + p.variant; var o = byTierVar[k] || (byTierVar[k] = { tier: p.tier, variant: p.variant, up: 0, down: 0, flat: 0 }); o[p.direction === 'up' ? 'up' : p.direction === 'down' ? 'down' : 'flat']++; });
+    var pHist = new Array(10).fill(0); model.predictions.forEach(function (p) { pHist[Math.min(9, Math.floor(p.pUp * 10))]++; });
+    // agreement is judged only where BOTH layers take a side; a neutral market is 'one-sided', not a disagreement
+    var agree = 0, disagree = 0, oneSided = 0, dis = []; model.predictions.forEach(function (p) { if (p.marketConfidence < 0.3) return; var a = p.eHist > 0.02 ? 1 : p.eHist < -0.02 ? -1 : 0, b = p.eMarket > 0.02 ? 1 : p.eMarket < -0.02 ? -1 : 0; if (a === 0 && b === 0) return; if (a === 0 || b === 0) { oneSided++; return; } if (a === b) agree++; else { disagree++; if (p.marketConfidence >= 0.4) dis.push(p); } });
+    dis.sort(function (a, b) { return Math.abs(b.eHist - b.eMarket) - Math.abs(a.eHist - a.eMarket); });
+    // ---- coverage
+    var nullCounts = { np: 0, f: 0, r: 0, n: 0, nf: 0, nr: 0, m: 0, mf: 0, mr: 0 }, pets = 0; ctx.items.forEach(function (it) { if (it.cat !== 'Pets') return; pets++; Object.keys(nullCounts).forEach(function (k) { if (it.values[k] == null) nullCounts[k]++; }); });
+    return {
+      listings: { count: totalL, windowHours: ctx.listingWindowHours, spanHours: spanH, perHour: totalL / spanH, posters: posters.size, medianPerPoster: median(perPoster), top1pctShare: totalL ? top1 / totalL : 0, top10pctShare: totalL ? top10 / totalL : 0, mostOffered: top(offered, 15), mostWanted: top(wanted, 15), ratioHigh: ratio.slice(0, 12), ratioLow: ratio.slice(-12).reverse(), signs: top(signs, 12), hours: lHours },
+      completed: { count: ctx.completed.length, priced: priced, traders: traders.size, sinceDays: isFinite(cMin) ? Math.round((now - cMin) / DAY) : null, medianItemsPerSide: median(itemsPerSide), medianTotal: median(totals), p90Total: pct(totals, 0.9), mostTraded: top(sides, 15), overpays: overpays.slice(0, 12), underpays: underpays.slice(0, 12), hours: cHours, days: cDays },
+      potions: { nPets: rF.length, fOverNoPot: median(rF), rOverNoPot: median(rR), frOverNoPot: median(rFR), multipliers: multipliers },
+      board: { changes: nUpd, weeks: weekRows, hours: bHours, days: bDays, byCategory: Array.from(byCat.values()).sort(function (a, b) { return (b.raises + b.drops) - (a.raises + a.drops); }), stepSizes: stepSizes, mostUpdated30: mostUpdated, up7: movers('chg7', 1, 10), down7: movers('chg7', -1, 10), up30: movers('chg30', 1, 10), down30: movers('chg30', -1, 10), up90: movers('chg90', 1, 10), down90: movers('chg90', -1, 10), neverUpdated: never, stale90: stale90 },
+      model: { rows: model.predictions.length, byTierVariant: Object.values(byTierVar), pUpHistogram: pHist, agree: agree, disagree: disagree, oneSided: oneSided, disagreements: dis.slice(0, 15).map(function (p) { return { name: p.name, variant: p.variant, value: p.value, eHist: p.eHist, eMarket: p.eMarket, conf: p.marketConfidence, direction: p.direction }; }) },
+      coverage: { pricedListings: model.market.pricedListings, listings: ctx.listings.length, pricedCompleted: model.market.pricedCompleted, completed: ctx.completed.length, unknownNames: model.market.unknownNames.slice(0, 12), pets: pets, nullPotionStates: nullCounts, nameCollisions: model.summary.nameCollisions }
+    };
+  }
+
+  var api = { build: build, insights: buildInsights, tierOf: tierOf, roundValue: roundValue, priceEntry: priceEntry, VARIANT_FIELD: VARIANT_FIELD, VARIANT_LABEL: VARIANT_LABEL, FEATURE_NAMES: FEATURE_NAMES, TIER_ORDER: TIER_ORDER };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.AMVGGEngine = api;
 })(typeof window !== 'undefined' ? window : this);

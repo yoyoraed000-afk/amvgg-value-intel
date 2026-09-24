@@ -131,7 +131,7 @@
     <div class="meta-line" id="metaLine">loading data…</div>
   </div>
   <nav class="tabs" id="tabs">
-    <a href="#overview" class="active">Overview</a><a href="#invest">Pets to invest in</a><a href="#opportunities">Opportunities</a><a href="#alerts">Alerts</a><a href="#explorer">Explorer</a><a href="#market">Market</a><a href="#backtest">Backtest</a><a href="#method">Method</a><a href="#integrate">Integrate</a>
+    <a href="#overview" class="active">Overview</a><a href="#invest">Pets to invest in</a><a href="#opportunities">Opportunities</a><a href="#alerts">Alerts</a><a href="#explorer">Explorer</a><a href="#insights">Insights</a><a href="#market">Market</a><a href="#backtest">Backtest</a><a href="#method">Method</a><a href="#integrate">Integrate</a>
   </nav>
 </header>
 
@@ -195,6 +195,11 @@
     <div class="section-head"><div><h2>Explorer</h2><p class="lede">Search any pet or item to see its value history, the live trades behind the signal, and the reasoning for the prediction.</p></div></div>
     <div class="controls"><input class="search" id="search" list="itemNames" placeholder="Type a pet or item name…" autocomplete="off"><datalist id="itemNames"></datalist></div>
     <div id="explorer"><p class="empty">Pick an item to begin.</p></div>
+  </section>
+
+  <section class="view" id="view-insights">
+    <div class="section-head"><div><h2>Insights</h2><p class="lede">What the data says about the market, the traders and the Value Board, computed from this snapshot every time the page loads.</p></div></div>
+    <div id="insights"><p class="empty">Computing…</p></div>
   </section>
 
   <section class="view" id="view-market">
@@ -290,6 +295,15 @@
     var s = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '">';
     for (var i = 0; i <= 4; i++) { var v = i / 4, yy = y(v); s += '<line class="grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '"/><text x="' + (L - 6) + '" y="' + (yy + 4) + '" text-anchor="end">' + Math.round(v * 100) + '%</text>'; }
     rows.forEach(function (r, i) { var cx = L + gw * (i + 0.5); var ya = y(r.a), yb = y(r.b); s += '<rect class="bar" x="' + (cx - bw - 1) + '" y="' + ya + '" width="' + bw + '" height="' + (y(0) - ya) + '" rx="3"><title>' + esc(opts.aLabel + ' ' + Math.round(r.a * 100) + '%') + '</title></rect><rect class="bar obs" x="' + (cx + 1) + '" y="' + yb + '" width="' + bw + '" height="' + (y(0) - yb) + '" rx="3"><title>' + esc(opts.bLabel + ' ' + Math.round(r.b * 100) + '%') + '</title></rect><text x="' + cx + '" y="' + (H - B + 16) + '" text-anchor="middle">' + esc(r.label) + '</text><text x="' + cx + '" y="' + (H - B + 30) + '" text-anchor="middle">n=' + r.n + '</text>'; });
+    s += '<line class="axis" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(0) + '" y2="' + y(0) + '"/></svg>';
+    container.innerHTML = s;
+  }
+  function vbars(container, rows, opts) { // rows: [{label, v}] single-series vertical bars
+    opts = opts || {}; var W = 560, H = 200, L = 40, R = 8, T = 12, B = 36, n = rows.length || 1, gw = (W - L - R) / n, bw = Math.max(2, gw * 0.7), mx = Math.max.apply(null, rows.map(function (r) { return r.v; }).concat([1]));
+    var y = function (v) { return T + (1 - v / mx) * (H - T - B); }, every = opts.every || Math.ceil(n / 12);
+    var s = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '">';
+    for (var i = 0; i <= 4; i++) { var v = mx * i / 4, yy = y(v); s += '<line class="grid" x1="' + L + '" x2="' + (W - R) + '" y1="' + yy + '" y2="' + yy + '"/><text x="' + (L - 6) + '" y="' + (yy + 4) + '" text-anchor="end">' + Math.round(v) + '</text>'; }
+    rows.forEach(function (r, i) { var cx = L + gw * (i + 0.5); s += '<rect class="bar' + (r.hi ? ' pos' : '') + '" x="' + (cx - bw / 2) + '" y="' + y(r.v) + '" width="' + bw + '" height="' + (y(0) - y(r.v)) + '" rx="2"><title>' + esc(r.label + ': ' + r.v) + '</title></rect>' + (i % every === 0 ? '<text x="' + cx + '" y="' + (H - B + 16) + '" text-anchor="middle">' + esc(r.label) + '</text>' : ''); });
     s += '<line class="axis" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(0) + '" y2="' + y(0) + '"/></svg>';
     container.innerHTML = s;
   }
@@ -436,6 +450,57 @@
       { key: 'r', label: 'Poster paid', num: true, fmt: function (r) { return moveHTML(Math.exp(r.r) - 1); }, val: function (r) { return r.r; } }
     ], trades, { sortKey: 't' });
   }
+  function miniTable(cols, rows) { return '<div class="table-wrap"><table class="grid"><thead><tr>' + cols.map(function (c) { return '<th' + (c.num ? ' class="num"' : '') + '>' + c.label + '</th>'; }).join('') + '</tr></thead><tbody>' + rows.map(function (r) { return '<tr>' + cols.map(function (c) { return '<td' + (c.num ? ' class="num"' : '') + '>' + c.fmt(r) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>'; }
+  function fmtX(x, d) { return x == null ? '—' : x.toFixed(d == null ? 2 : d) + '×'; }
+  function renderInsights() {
+    var I = AMVGGEngine.insights(MODEL), el = $('#insights');
+    var nameCol = { label: 'Item', fmt: function (r) { return nameHTML(r.name); } }, nCol = { label: 'Count', num: true, fmt: function (r) { return r.n; } };
+    var moverCols = [nameCol, { label: 'Value', num: true, fmt: function (r) { return fmtVal(r.value); } }, { label: 'Change', num: true, fmt: function (r) { return moveHTML(r.change); } }];
+    var h = '';
+    h += '<div class="stat-strip">' + [
+      ['Listings in window', I.listings.count.toLocaleString(), 'last ' + I.listings.windowHours + ' h · ' + Math.round(I.listings.perHour).toLocaleString() + ' per hour'],
+      ['Posters', I.listings.posters.toLocaleString(), 'median ' + I.listings.medianPerPoster + ' listings each · top 10% post ' + Math.round(I.listings.top10pctShare * 100) + '%'],
+      ['Completed trades', I.completed.count.toLocaleString(), 'last ' + I.completed.sinceDays + ' days · ' + I.completed.traders.toLocaleString() + ' traders'],
+      ['Typical trade', fmtVal(I.completed.medianTotal), 'median value per side · p90 ' + fmtVal(I.completed.p90Total)],
+      ['Board changes', I.board.changes.toLocaleString(), 'since ' + MODEL.summary.updatesFrom + ' · ' + I.board.neverUpdated + ' items never touched'],
+      ['Layer agreement', I.model.agree + I.model.disagree ? Math.round(I.model.agree / (I.model.agree + I.model.disagree) * 100) + '%' : '—', 'of ' + (I.model.agree + I.model.disagree) + ' rows where both layers take a side (' + I.model.oneSided + ' one-sided)']
+    ].map(function (t) { return '<div class="stat"><div class="label">' + t[0] + '</div><div class="num">' + t[1] + '</div><div class="hint">' + t[2] + '</div></div>'; }).join('') + '</div>';
+    h += '<div class="section-head"><h2>Market pulse</h2></div><div class="two-col">';
+    h += '<div class="panel"><h3>Most offered <span class="count">listings, last ' + I.listings.windowHours + ' h</span></h3>' + miniTable([nameCol, nCol], I.listings.mostOffered) + '</div>';
+    h += '<div class="panel"><h3>Most wanted</h3>' + miniTable([nameCol, nCol], I.listings.mostWanted) + '</div>';
+    h += '<div class="panel"><h3>Demand outruns supply <span class="count">wanted ÷ offered, ≥ 20 mentions</span></h3>' + miniTable([nameCol, { label: 'Wanted', num: true, fmt: function (r) { return r.wanted; } }, { label: 'Offered', num: true, fmt: function (r) { return r.offered; } }, { label: 'Ratio', num: true, fmt: function (r) { return fmtX(r.ratio); } }], I.listings.ratioHigh) + '</div>';
+    h += '<div class="panel"><h3>Supply outruns demand</h3>' + miniTable([nameCol, { label: 'Wanted', num: true, fmt: function (r) { return r.wanted; } }, { label: 'Offered', num: true, fmt: function (r) { return r.offered; } }, { label: 'Ratio', num: true, fmt: function (r) { return fmtX(r.ratio); } }], I.listings.ratioLow) + '</div>';
+    h += '<div class="panel"><h3>What posters ask for instead of items</h3>' + miniTable([{ label: 'Sign', fmt: function (r) { return esc(r.name); } }, nCol], I.listings.signs) + '</div>';
+    h += '<div class="panel"><h3>Listings by hour <span class="count">UTC</span></h3><div id="chLHours"></div></div></div>';
+    h += '<div class="section-head"><h2>Completed trades</h2></div><div class="two-col">';
+    h += '<div class="panel"><h3>Most traded <span class="count">trade sides, last ' + I.completed.sinceDays + ' days</span></h3>' + miniTable([nameCol, nCol], I.completed.mostTraded) + '</div>';
+    h += '<div class="panel"><h3>Paid above list <span class="count">avg premium received, ≥ 8 sides</span></h3>' + miniTable([nameCol, { label: 'Premium', num: true, fmt: function (r) { return moveHTML(r.mean); } }, { label: 'Sides', num: true, fmt: function (r) { return r.n; } }], I.completed.overpays) + '</div>';
+    h += '<div class="panel"><h3>Paid below list</h3>' + miniTable([nameCol, { label: 'Discount', num: true, fmt: function (r) { return moveHTML(r.mean); } }, { label: 'Sides', num: true, fmt: function (r) { return r.n; } }], I.completed.underpays) + '</div>';
+    h += '<div class="panel"><h3>Potion premiums <span class="count">medians across ' + I.potions.nPets + ' pets with all four states</span></h3><div class="kv"><div><div class="k">F vs no potion</div><div class="v">' + fmtX(I.potions.fOverNoPot) + '</div></div><div><div class="k">R vs no potion</div><div class="v">' + fmtX(I.potions.rOverNoPot) + '</div></div><div><div class="k">FR vs no potion</div><div class="v">' + fmtX(I.potions.frOverNoPot) + '</div></div></div>' + miniTable([{ label: 'Tier', fmt: function (r) { return TIER_LABEL[r.tier]; } }, { label: 'Neon ÷ Regular', num: true, fmt: function (r) { return fmtX(r.neonOverRegular, 1); } }, { label: 'Mega ÷ Neon', num: true, fmt: function (r) { return fmtX(r.megaOverNeon, 1); } }, { label: 'Pets', num: true, fmt: function (r) { return r.n; } }], I.potions.multipliers) + '</div>';
+    h += '<div class="panel"><h3>Trades by hour <span class="count">UTC</span></h3><div id="chCHours"></div></div><div class="panel"><h3>Trades by weekday</h3><div id="chCDays"></div></div></div>';
+    h += '<div class="section-head"><h2>Value Board activity</h2></div><div class="two-col">';
+    h += '<div class="panel"><h3>Changes per week</h3><div id="chWeeks"></div></div><div class="panel"><h3>Changes by hour <span class="count">UTC</span></h3><div id="chBHours"></div></div>';
+    h += '<div class="panel"><h3>Raises vs drops by category</h3>' + miniTable([{ label: 'Category', fmt: function (r) { return esc(r.cat); } }, { label: 'Raises', num: true, fmt: function (r) { return r.raises; } }, { label: 'Drops', num: true, fmt: function (r) { return r.drops; } }, { label: 'Raise share', num: true, fmt: function (r) { return Math.round(r.raises / (r.raises + r.drops) * 100) + '%'; } }], I.board.byCategory) + '</div>';
+    h += '<div class="panel"><h3>Typical step size <span class="count">per change, by tier</span></h3>' + miniTable([{ label: 'Tier', fmt: function (r) { return TIER_LABEL[r.tier]; } }, { label: 'Raise median', num: true, fmt: function (r) { return r.raiseMedian == null ? '—' : fmtPct(Math.exp(r.raiseMedian) - 1); } }, { label: 'Raise p90', num: true, fmt: function (r) { return r.raiseP90 == null ? '—' : fmtPct(Math.exp(r.raiseP90) - 1); } }, { label: 'n', num: true, fmt: function (r) { return r.nRaise; } }, { label: 'Drop median', num: true, fmt: function (r) { return r.dropMedian == null ? '—' : fmtPct(-(Math.exp(r.dropMedian) - 1)); } }, { label: 'Drop p90', num: true, fmt: function (r) { return r.dropP90 == null ? '—' : fmtPct(-(Math.exp(r.dropP90) - 1)); } }, { label: 'n', num: true, fmt: function (r) { return r.nDrop; } }], I.board.stepSizes) + '</div>';
+    h += '<div class="panel"><h3>Most updated pets <span class="count">last 30 days, regular value</span></h3>' + miniTable([nameCol, { label: 'Updates', num: true, fmt: function (r) { return r.n; } }, { label: 'Value', num: true, fmt: function (r) { return fmtVal(r.value); } }, { label: '30d change', num: true, fmt: function (r) { return r.chg30 == null ? '—' : moveHTML(r.chg30); } }], I.board.mostUpdated30) + '</div>';
+    h += '<div class="panel"><h3>Biggest risers, 30 days <span class="count">regular value ≥ 0.01</span></h3>' + miniTable(moverCols, I.board.up30) + '</div>';
+    h += '<div class="panel"><h3>Biggest fallers, 30 days</h3>' + miniTable(moverCols, I.board.down30) + '</div>';
+    h += '<div class="panel"><h3>Biggest risers, 90 days</h3>' + miniTable(moverCols, I.board.up90) + '</div>';
+    h += '<div class="panel"><h3>Biggest fallers, 90 days</h3>' + miniTable(moverCols, I.board.down90) + '</div>';
+    h += '<div class="panel"><h3>Last 7 days <span class="count">risers and fallers</span></h3>' + miniTable(moverCols, I.board.up7.concat(I.board.down7)) + '</div></div>';
+    h += '<div class="section-head"><h2>Model overview</h2></div><div class="two-col">';
+    h += '<div class="panel"><h3>Calls by tier and variant</h3>' + miniTable([{ label: 'Tier', fmt: function (r) { return TIER_LABEL[r.tier]; } }, { label: 'Variant', fmt: function (r) { return esc(r.variant); } }, { label: 'Raise', num: true, fmt: function (r) { return r.up; } }, { label: 'Lower', num: true, fmt: function (r) { return r.down; } }, { label: 'Hold', num: true, fmt: function (r) { return r.flat; } }], I.model.byTierVariant.sort(function (a, b) { return AMVGGEngine.TIER_ORDER[b.tier] - AMVGGEngine.TIER_ORDER[a.tier] || a.variant.localeCompare(b.variant); })) + '</div>';
+    h += '<div class="panel"><h3>Distribution of P(rise)</h3><div id="chPUp"></div><p class="muted">Most rows sit near zero: nothing happens to most items in most months. The right-hand tail is the watch list.</p></div>';
+    h += '<div class="panel" style="grid-column:1/-1"><h3>Where history and market point opposite ways <span class="count">market confidence ≥ 40%</span></h3>' + miniTable([nameCol, { label: 'Variant', fmt: function (r) { return esc(r.variant); } }, { label: 'Value', num: true, fmt: function (r) { return fmtVal(r.value); } }, { label: 'History says', num: true, fmt: function (r) { return moveHTML(r.eHist); } }, { label: 'Market says', num: true, fmt: function (r) { return moveHTML(r.eMarket); } }, { label: 'Evidence', fmt: function (r) { return confHTML(r.conf); } }, { label: 'Call', fmt: function (r) { return dirHTML(r.direction); } }], I.model.disagreements) + '<p class="muted">Disagreements are where a human should look: the board may be lagging the market, or a few traders may be pushing a pet.</p></div></div>';
+    h += '<div class="section-head"><h2>Data coverage</h2></div><div class="two-col"><div class="panel"><h3>Pricing coverage</h3><div class="kv"><div><div class="k">Listings fully priced</div><div class="v">' + Math.round(I.coverage.pricedListings / Math.max(1, I.coverage.listings) * 100) + '%</div></div><div><div class="k">Completed fully priced</div><div class="v">' + Math.round(I.coverage.pricedCompleted / Math.max(1, I.coverage.completed) * 100) + '%</div></div></div><p class="muted">Unpriced sides carry a sign such as “Upgrade” or a name not on the value list: ' + (I.coverage.unknownNames.map(function (u) { return esc(u.name) + ' (' + u.count + ')'; }).join(' · ') || 'none') + '</p></div>';
+    h += '<div class="panel"><h3>Potion states missing on the site <span class="count">of ' + I.coverage.pets + ' pets</span></h3>' + miniTable([{ label: 'State', fmt: function (r) { return esc(AMVGGEngine.VARIANT_LABEL[r.k]); } }, { label: 'Pets without a value', num: true, fmt: function (r) { return r.n; } }], Object.keys(I.coverage.nullPotionStates).map(function (k) { return { k: k, n: I.coverage.nullPotionStates[k] }; })) + '</div></div>';
+    el.innerHTML = h;
+    var hourRows = function (arr) { return arr.map(function (v, i) { return { label: (i < 10 ? '0' : '') + i, v: v }; }); };
+    vbars($('#chLHours'), hourRows(I.listings.hours), { every: 3 }); vbars($('#chCHours'), hourRows(I.completed.hours), { every: 3 }); vbars($('#chBHours'), hourRows(I.board.hours), { every: 3 });
+    vbars($('#chCDays'), I.completed.days.map(function (v, i) { return { label: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][i], v: v }; }), { every: 1 });
+    vbars($('#chWeeks'), I.board.weeks.map(function (w) { return { label: w.label.slice(5), v: w.v }; }), { every: 2 });
+    vbars($('#chPUp'), I.model.pUpHistogram.map(function (v, i) { return { label: (i * 10) + '–' + (i * 10 + 10) + '%', v: v, hi: i >= 5 }; }), { every: 1 });
+  }
   function renderMarket() {
     var min = +$('#mMin').value || 1, lim = +$('#mLimit').value, minSides = +$('#mSides').value || 0;
     var rows = []; MODEL.market.signals.forEach(function (s) { if (s.activity >= min && s.overpayN >= minSides) rows.push(s); });
@@ -517,6 +582,7 @@
 
   function renderAll() {
     renderStats(); renderOverview(); renderInvest(); renderOpps(); renderAlerts(); renderMarket(); renderBacktest(); renderMethod();
+    try { renderInsights(); } catch (e) { $('#insights').innerHTML = '<p class="empty">Insights failed: ' + esc(e.message) + '</p>'; console.error(e); }
     var top = MODEL.predictions[0]; if (top) renderExplorer(top.name);
     $('#metaLine').textContent = 'snapshot ' + DATA.meta.collectedAt.replace('T', ' ').slice(0, 16) + ' UTC · ' + DATA.meta.counts.items + ' items · ' + DATA.meta.counts.updates + ' update rows';
   }
