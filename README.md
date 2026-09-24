@@ -39,6 +39,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File serve.ps1
 # open http://localhost:8765/
 ```
 
+## Runs itself on GitHub Actions
+
+`.github/workflows/update.yml` runs every hour on GitHub's machines: it restores the rolling store from the `data` branch, fetches only what is new (`build/collect_incremental.sh`), merges it (`build/build_state.pl`), publishes `site/` to GitHub Pages, and force-pushes the store back to `data` as a single commit so the repo never grows. A deeper pass runs daily at 03:23 UTC (more listings, up to 800 trader profiles). Trigger a run by hand from the Actions tab ("Run workflow", tick *Deep pass* for the long version).
+
+Rolling store windows: every value update ever seen, listings from the last 48 hours, completed trades from the last 60 days, and one profile record per trader (refreshed at most daily).
+
+One-time setup after pushing: Settings → Pages → Source = **GitHub Actions**. The dashboard then lives at `https://<user>.github.io/<repo>/` (add a CNAME in Cloudflare for `intel.amvgg.com` if wanted).
+
 ## Run it inside the Next.js app instead
 
 `engine.js` has no dependencies and exports `build(data)`. Feed it straight from the database in a cron route (see the **Integrate** tab of the dashboard for the exact shapes) and store `model.predictions` for the Value Board dashboard or a public "trend" badge on pet pages.
