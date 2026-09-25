@@ -24,12 +24,11 @@ serve.ps1    tiny static server for local viewing (PowerShell, no dependencies)
 
 ## Refresh the snapshot
 
-Requires Git Bash (curl + perl, both ship with Git for Windows).
+Requires Git Bash (curl + perl, both ship with Git for Windows). The collectors are for the site owner: running them against amvgg.com without written permission violates its Terms of Service.
 
 ```bash
-cd build
-bash collect.sh                  # ~20 min; one API call per 2.5 s, backs off on 429, resumable
-perl build_data.pl ../site/data.json
+bash build/collect_incremental.sh          # fetch what is new; FULL=1 for the deep pass
+perl build/build_state.pl site/data.json
 ```
 
 Then view locally:
@@ -43,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File serve.ps1
 
 `.github/workflows/update.yml` runs every hour on GitHub's machines: it restores the rolling store from the `data` branch, fetches only what is new (`build/collect_incremental.sh`), merges it (`build/build_state.pl`), publishes `site/` to GitHub Pages, and force-pushes the store back to `data` as a single commit so the repo never grows. A deeper pass runs daily at 03:23 UTC (more listings, up to 800 trader profiles). Trigger a run by hand from the Actions tab ("Run workflow", tick *Deep pass* for the long version).
 
-Rolling store windows: every value update ever seen, listings from the last 48 hours, completed trades from the last 60 days, and one profile record per trader (refreshed at most daily).
+Rolling store windows: every value update ever seen, listings from the last 12 hours (the page ships the last 6), completed trades from the last 60 days (the page ships 30), and one profile record per trader (refreshed at most daily, sooner when its stats are missing). Each run records whether it reached the previous listings; gaps are kept in the store and shown on the Overview.
 
 One-time setup after pushing: Settings → Pages → Source = **GitHub Actions**. The dashboard then lives at `https://<user>.github.io/<repo>/` (add a CNAME in Cloudflare for `intel.amvgg.com` if wanted).
 

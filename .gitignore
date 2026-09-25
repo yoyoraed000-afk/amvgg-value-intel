@@ -1,6 +1,8 @@
 build/raw/
 build/raw_*/
-build/collect.out
+build/*.out
+build/*.txt
+build/.insights-done
 state/
 site/data.json
 *.log

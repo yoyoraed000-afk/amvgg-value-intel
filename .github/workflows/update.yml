@@ -2,12 +2,11 @@ name: Update predictions
 
 on:
   schedule:
-    - cron: '7 * * * *'        # every hour: fetch what is new, rebuild, publish
-    - cron: '23 3 * * *'       # 03:23 UTC daily: deeper pass (more listings, more trader profiles)
+    - cron: '7 * * * *'        # hourly; the job itself decides when a deep pass is due (every ~20 h), so cron delays cannot skip it
   workflow_dispatch:
     inputs:
       full:
-        description: 'Deep pass (more pages and profiles)'
+        description: 'Deep pass (more listing pages and trader profiles)'
         type: boolean
         default: false
 
@@ -15,6 +14,7 @@ permissions:
   contents: write
   pages: write
   id-token: write
+  actions: write
 
 concurrency:
   group: update-predictions
@@ -23,46 +23,105 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 58
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Keep the schedule alive
+        # GitHub disables scheduled workflows after 60 days without repository activity; commit a marker when main has been quiet for 25 days
+        # and re-enable the workflow explicitly (both are no-ops most days). Pushes made with GITHUB_TOKEN do not trigger workflows.
+        run: |
+          set -euo pipefail
+          last=$(git log -1 --format=%ct origin/main 2>/dev/null || git log -1 --format=%ct)
+          age_days=$(( ( $(date +%s) - last ) / 86400 ))
+          echo "main last committed $age_days days ago"
+          if [ "$age_days" -ge 25 ]; then
+            echo "last keepalive: $(date -u +%F)" > KEEPALIVE.md
+            git -c user.name=amvgg-bot -c user.email=amvgg-bot@users.noreply.github.com add KEEPALIVE.md
+            git -c user.name=amvgg-bot -c user.email=amvgg-bot@users.noreply.github.com commit -qm "keepalive $(date -u +%F)"
+            git push -q origin HEAD:main
+          fi
+          gh api -X PUT "repos/${{ github.repository }}/actions/workflows/update.yml/enable" >/dev/null 2>&1 || echo "::warning::could not re-enable the workflow via API"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Restore rolling store (data branch)
+        # first run: an empty orphan worktree; later runs: a worktree at the single commit of the data branch. A network failure fails the job
+        # instead of silently starting from an empty store (which the Save step would then have force-pushed over the real one).
         run: |
-          git fetch --depth 1 origin data 2>/dev/null && git worktree add state origin/data || mkdir -p state
-          ls -la state || true
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin data >/dev/null; then
+            git fetch --depth 1 origin data
+            git worktree add --detach state FETCH_HEAD
+            cp state/meta.json "$RUNNER_TEMP/prev_meta.json" 2>/dev/null || true
+            echo "restored store: $(ls state | tr '\n' ' ')"
+          else
+            rc=$?; if [ "$rc" -ne 2 ]; then echo "::error::cannot query origin (rc=$rc)"; exit 1; fi
+            git worktree add --orphan -b data state
+            echo "no data branch yet: starting an empty store"
+          fi
+
+      - name: Decide whether this is a deep pass
+        id: mode
+        run: |
+          full=0
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.full }}" = "true" ]; then full=1; fi
+          last=$(perl -MJSON::PP -e '$/=undef; my $j=eval{decode_json(<STDIN>)}; print $j->{lastDeepRun}//""' < state/meta.json 2>/dev/null || true)
+          if [ -z "$last" ]; then full=1; else
+            age=$(( $(date +%s) - $(date -d "$last" +%s) ))
+            [ "$age" -ge $((20 * 3600)) ] && full=1
+          fi
+          echo "full=$full" >> "$GITHUB_OUTPUT"; echo "deep pass: $full (last deep run: ${last:-never})"
 
       - name: Collect new data from amvgg.com
+        # bounded: the collector caps its own retries and the listing phase; the outer timeout guarantees the merge/verify/publish steps still run
         env:
-          FULL: ${{ ((github.event_name == 'schedule' && github.event.schedule == '23 3 * * *') || (github.event_name == 'workflow_dispatch' && inputs.full)) && '1' || '0' }}
+          FULL: ${{ steps.mode.outputs.full }}
         run: |
           echo "FULL=$FULL"
-          bash build/collect_incremental.sh
-          tail -3 build/raw/collect.log
+          timeout --foreground 42m bash build/collect_incremental.sh || echo "::warning::collector exited $? (partial data; see build/raw/collect.log)"
+          tail -3 build/raw/collect.log || true
+          cat build/raw/run.json 2>/dev/null || echo '{"listingBoundaryReached":false,"failed":99,"degraded":true}' > build/raw/run.json
 
       - name: Merge into store and build data.json
+        env:
+          FULL: ${{ steps.mode.outputs.full }}
         run: perl build/build_state.pl site/data.json
 
-      - name: Save rolling store (single-commit data branch)
+      - name: Verify the build before publishing
         run: |
+          set -euo pipefail
+          perl -MJSON::PP -e '
+            $/=undef; my $j=decode_json(<STDIN>); my $c=$j->{meta}{counts};
+            printf "items=%d updates=%d listings=%d completed=%d profiles=%d (stats %d) synthetic=%d degraded=%s boundary=%s\n", @$c{qw(items updates listings completed profiles profilesWithStats syntheticUpdates)}, $j->{meta}{run}{degraded}, $j->{meta}{run}{listingBoundaryReached};
+            die "too few items ($c->{items})\n" if $c->{items} < 1500;
+            die "no completed trades\n" if $c->{completed} < 100;
+            die "profiles exported without stats\n" if $c->{profiles} >= 50 && $c->{profilesWithStats} == 0;
+          ' < site/data.json
+          big=$(find state -type f -size +45M -printf '%p %s\n' || true)
+          if [ -n "$big" ]; then echo "::error::store file too large for GitHub: $big"; exit 1; fi
+          {
+            echo "### Update $(date -u +'%F %H:%M') UTC"
+            perl -MJSON::PP -e '$/=undef; my $j=decode_json(<STDIN>); my $m=$j->{meta}; my $c=$m->{counts}; my $r=$m->{run};
+              printf "- items %d, update rows %d (%d synthetic closes), listings %d (%dh), completed %d (%dd), profiles %d (stats for %d)\n- this run: +%d updates, +%d listings, +%d completed, +%d profiles; boundary %s; degraded %s; failed fetches %d\n", $c->{items}, $c->{updates}, $c->{syntheticUpdates}, $c->{listings}, $m->{listingWindowHours}, $c->{completed}, $m->{completedWindowDays}, $c->{profiles}, $c->{profilesWithStats}, $r->{newUpdates}, $r->{newListings}, $r->{newCompleted}, $r->{newProfiles}, ($r->{listingBoundaryReached}?"reached":"NOT reached"), ($r->{degraded}?"yes":"no"), $r->{failedFetches};
+              print "- warnings: ", join("; ", @{$r->{warnings}||[]}), "\n" if @{$r->{warnings}||[]};
+              print "- listing gaps on record: ", scalar(@{$m->{listingGaps}||[]}), "\n";' < site/data.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save rolling store (single-commit data branch)
+        # the worktree shares the checkout's persisted credentials, so no token appears on any command line
+        run: |
+          set -euo pipefail
           cd state
-          rm -rf .git
-          git init -q -b data
+          if git rev-parse --verify -q HEAD >/dev/null; then git checkout -q --orphan "snap-${{ github.run_id }}"; fi
           git -c user.name=amvgg-bot -c user.email=amvgg-bot@users.noreply.github.com add -A
           git -c user.name=amvgg-bot -c user.email=amvgg-bot@users.noreply.github.com commit -qm "store $(date -u +%FT%TZ)"
-          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" data
-
-      - name: Keep the schedule alive (monthly commit on main)
-        if: github.event_name == 'schedule' && github.event.schedule == '23 3 * * *'
-        run: |
-          if [ "$(date -u +%d)" = "01" ]; then
-            echo "last keepalive: $(date -u +%F)" > KEEPALIVE.md
-            git -c user.name=amvgg-bot -c user.email=amvgg-bot@users.noreply.github.com commit -qam "keepalive $(date -u +%F)" || true
-            git push -q "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:main || true
-          fi
+          git push -qf origin HEAD:refs/heads/data
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

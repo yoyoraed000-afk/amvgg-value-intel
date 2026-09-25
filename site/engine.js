@@ -8,6 +8,8 @@
   var DAY = 86400000;
   var VARIANT_FIELD = { '': 'np', fr: 'fr', r: 'r', f: 'f', n: 'n', nr: 'nr', nf: 'nf', nfr: 'nfr', m: 'm', mr: 'mr', mf: 'mf', mfr: 'mfr' };
   var VARIANT_LABEL = { np: 'No potion', fr: 'FR', r: 'R', f: 'F', n: 'N', nr: 'NR', nf: 'NF', nfr: 'NFR', m: 'M', mr: 'MR', mf: 'MF', mfr: 'MFR', v: '' };
+  // every potion state belongs to one tracked tier (its FR value is the tier's reference value on the site)
+  var TIER_OF = { np: 'fr', f: 'fr', r: 'fr', fr: 'fr', n: 'nfr', nf: 'nfr', nr: 'nfr', nfr: 'nfr', m: 'mfr', mf: 'mfr', mr: 'mfr', mfr: 'mfr', v: 'v' };
   var DEMAND_NUM = { High: 2, Medium: 1, Low: 0 };
   var BASELESS_START = Date.parse('2026-03-24T00:00:00Z');
   var UP_THRESH = Math.log(1.02);
@@ -34,10 +36,15 @@
     if (e.sign) { if (e.signValue != null && isFinite(e.signValue)) return { value: e.signValue, key: 'sign:' + e.sign, fixed: true, label: e.sign + ' (' + e.signValue + ')' }; return null; }
     var it = byName.get(e.name); if (!it) return null;
     var value, f;
-    if (it.cat === 'Pets') { f = VARIANT_FIELD[e.type || ''] || 'fr'; value = it.values[f]; if (value == null) { value = it.values.fr; f = 'fr'; } }
-    else { f = 'v'; value = it.values.v; }
+    var code;
+    if (it.cat === 'Pets') {
+      code = VARIANT_FIELD[e.type || ''] || 'fr'; f = code; value = it.values[f];
+      // most pets list only FR / NFR / MFR: a missing potion state falls back to ITS OWN tier's value, never to the regular FR
+      if (value == null) { f = TIER_OF[code]; value = it.values[f]; }
+      if (value == null) { f = 'fr'; value = it.values.fr; }
+    } else { code = 'v'; f = 'v'; value = it.values.v; }
     if (value == null || !isFinite(value)) return null;
-    return { value: value, key: it.name + '|' + f, name: it.name, variant: f, item: it, label: it.name + (VARIANT_LABEL[f] ? ' ' + VARIANT_LABEL[f] : '') };
+    return { value: value, key: it.name + '|' + f, name: it.name, variant: f, code: code, tier: TIER_OF[code] || 'v', item: it, label: it.name + (VARIANT_LABEL[code] ? ' ' + VARIANT_LABEL[code] : '') };
   }
   function priceSide(side, byName) {
     var total = 0, parts = [], ok = true;
@@ -47,30 +54,48 @@
 
   /* ---------------- value history from the update log ---------------- */
   function buildHistory(updates) {
-    var series = new Map(); // key -> [{t, prev, new}] sorted asc
+    var series = new Map(), demandSeries = new Map(); // key -> [{t, prev, new}] sorted asc (values; demand levels 0/1/2)
     updates.forEach(function (u) {
-      if (u.prev == null && u.new == null) return; // demand-only rows
-      if (u.prev == null || u.new == null) return;
       var key = u.item + '|' + u.var, t = Date.parse(u.t); if (!isFinite(t)) return;
-      if (!series.has(key)) series.set(key, []);
-      series.get(key).push({ t: t, prev: u.prev, new: u.new });
+      if (u.prev != null && u.new != null) {
+        if (u.prev === u.new) return;
+        if (!series.has(key)) series.set(key, []);
+        series.get(key).push({ t: t, prev: u.prev, new: u.new, synthetic: !!u.synthetic });
+      } else if (u.newDemand != null || u.prevDemand != null) {
+        var pd = DEMAND_NUM[u.prevDemand], nd = DEMAND_NUM[u.newDemand]; if (pd == null && nd == null) return;
+        if (!demandSeries.has(key)) demandSeries.set(key, []);
+        demandSeries.get(key).push({ t: t, prev: pd == null ? nd : pd, new: nd == null ? pd : nd });
+      }
     });
     series.forEach(function (arr) { arr.sort(function (a, b) { return a.t - b.t; }); });
-    return series;
+    demandSeries.forEach(function (arr) { arr.sort(function (a, b) { return a.t - b.t; }); });
+    return { series: series, demandSeries: demandSeries };
+  }
+  function lookupAt(arr, t) { // value in force at t for a sorted [{t, prev, new}] series (null when the series is empty)
+    if (!arr || !arr.length) return null;
+    if (t < arr[0].t) return arr[0].prev;
+    var lo = 0, hi = arr.length - 1, ans = 0;
+    while (lo <= hi) { var mid = (lo + hi) >> 1; if (arr[mid].t <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
+    return arr[ans].new;
   }
   function makeValueAt(series, byName) {
     return function (key, t) {
       var arr = series.get(key);
       if (!arr || !arr.length) { var nm = key.split('|'), it = byName.get(nm[0]); if (!it) return null; return it.cat === 'Pets' ? it.values[nm[1] === 'v' ? 'fr' : nm[1]] : it.values.v; }
-      if (t < arr[0].t) return arr[0].prev;
-      var lo = 0, hi = arr.length - 1, ans = 0;
-      while (lo <= hi) { var mid = (lo + hi) >> 1; if (arr[mid].t <= t) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
-      return arr[ans].new;
+      return lookupAt(arr, t);
+    };
+  }
+  function makeDemandAt(demandSeries, byName) { // demand level in force at t (today's demand only when nothing older is known)
+    return function (key, t) {
+      var nm = key.split('|'), it = byName.get(nm[0]); if (!it) return 1;
+      var cur = DEMAND_NUM[it.demand[it.cat === 'Pets' ? (nm[1] === 'v' ? 'fr' : nm[1]) : 'v']]; if (cur == null) cur = 1;
+      var arr = demandSeries.get(key); if (!arr || !arr.length) return cur;
+      var d = lookupAt(arr, t); return d == null ? cur : d;
     };
   }
 
   /* ---------------- history features ---------------- */
-  var FEATURE_NAMES = ['log10 value', 'log10 value²', 'change 7d', 'change 30d', 'change 90d', 'updates 30d', 'updates 90d', 'days since update', 'last direction', 'streak', 'is pet', 'demand', 'other-tier updates 30d', 'has 90d history', 'tier (0 regular, 1 neon, 2 mega)'];
+  var FEATURE_NAMES = ['log10 value', 'log10 value²', 'change 7d', 'change 30d', 'change 90d', 'updates 30d', 'updates 90d', 'days since update', 'last direction', 'streak', 'is pet', 'demand (at the time)', 'other-tier updates 30d', 'has 90d history', 'tier (0 regular, 1 neon, 2 mega)', 'demand changes 30d'];
   // the three tracked tiers of a pet and the potion states inside each (values map field names)
   var PET_TIERS = [{ v: 'v', field: 'fr', label: 'Regular', subs: ['np', 'f', 'r', 'fr'], codes: ['', 'f', 'r', 'fr'] },
                    { v: 'nfr', field: 'nfr', label: 'Neon', subs: ['n', 'nf', 'nr', 'nfr'], codes: ['n', 'nf', 'nr', 'nfr'] },
@@ -89,14 +114,16 @@
       if (d === lastDir) streak += d; else { streak = d; lastDir = d; }
       last = u;
     }
-    var daysSince = last ? Math.min(180, daysBetween(last.t, t)) : 180;
+    // with no logged change, the site's own lastUpdatedAt is the best guess of when this item last moved (the public log starts 2026-06-02)
+    var lastT = last ? last.t : (it && it.lastUpdatedAt ? Date.parse(it.lastUpdatedAt) : NaN);
+    var daysSince = isFinite(lastT) && lastT <= t ? Math.min(180, daysBetween(lastT, t)) : 180;
     var other30 = 0;
     if (it && it.cat === 'Pets') { ['v', 'nfr', 'mfr'].forEach(function (vv) { if (vv === vkey) return; var a2 = ctx.series.get(name + '|' + vv) || []; for (var j = 0; j < a2.length; j++) { if (a2[j].t > t) break; if (a2[j].t > t - 30 * DAY && a2[j].prev !== a2[j].new) other30++; } }); }
-    var demField = (it && it.cat === 'Pets') ? (vkey === 'v' ? 'fr' : vkey) : 'v';
-    var dem = it ? DEMAND_NUM[it.demand[demField]] : 1; if (dem == null) dem = 1;
+    var dem = ctx.demandAt(key, t);
+    var dchg = 0, da = ctx.demandSeries.get(key) || []; for (var q = 0; q < da.length; q++) { if (da[q].t > t) break; if (da[q].t > t - 30 * DAY && da[q].prev !== da[q].new) dchg++; }
     var tierIdx = vkey === 'nfr' ? 1 : vkey === 'mfr' ? 2 : 0;
     var lv = Math.log10(v0);
-    return { v0: v0, x: [lv, lv * lv, chg(7), chg(30), chg(90), n30, n90, daysSince / 30, lastDir, clamp(streak, -5, 5), it && it.cat === 'Pets' ? 1 : 0, dem, other30, (t - 90 * DAY) >= ctx.histStart ? 1 : 0, tierIdx], daysSince: daysSince, n30: n30, n90: n90, lastDir: lastDir, streak: streak, chg7: chg(7), chg30: chg(30), chg90: chg(90) };
+    return { v0: v0, x: [lv, lv * lv, chg(7), chg(30), chg(90), n30, n90, daysSince / 30, lastDir, clamp(streak, -5, 5), it && it.cat === 'Pets' ? 1 : 0, dem, other30, (t - 90 * DAY) >= ctx.histStart ? 1 : 0, tierIdx, Math.min(dchg, 3)], daysSince: daysSince, lastT: isFinite(lastT) ? lastT : null, n30: n30, n90: n90, lastDir: lastDir, streak: streak, chg7: chg(7), chg30: chg(30), chg90: chg(90), demand: dem };
   }
 
   /* ---------------- softmax regression ---------------- */
@@ -138,18 +165,41 @@
     if (rows.length < 200) return { ok: false, reason: 'not enough history rows (' + rows.length + ')', rows: rows.length };
     var dates = Array.from(new Set(rows.map(function (r) { return r.t; }))).sort(function (a, b) { return a - b; });
     var nTestDates = Math.max(2, Math.round(dates.length * 0.3));
-    var splitT = dates[dates.length - nTestDates];
-    var train = rows.filter(function (r) { return r.t < splitT; }), test = rows.filter(function (r) { return r.t >= splitT; });
-    var m = trainSoftmax(train.map(function (r) { return r.x; }), train.map(function (r) { return r.y; }), opts);
+    var testDates = dates.slice(dates.length - nTestDates), splitT = testDates[0];
+    // rolling-origin evaluation with an embargo: a test date D is scored by a model trained only on rows whose 30-day label window
+    // closed before D, so no value change decides both a training label and a test label
+    var X = function (r) { return r.x; }, Y = function (r) { return r.y; };
+    var scored = [], trainDateSet = new Set(), nTrainRows = 0, embargo = true;
+    testDates.forEach(function (D) {
+      var tr = rows.filter(function (r) { return r.t + horizon * DAY <= D; }); if (tr.length < 200) return;
+      tr.forEach(function (r) { trainDateSet.add(r.t); }); nTrainRows += tr.length;
+      var mD = trainSoftmax(tr.map(X), tr.map(Y), opts);
+      rows.forEach(function (r) { if (r.t === D) scored.push({ r: r, p: mD.predict(r.x) }); });
+    });
+    if (scored.length < 100) { // too little history for an embargoed test yet: fall back to the plain split and say so
+      embargo = false; scored = []; trainDateSet = new Set(); var tr0 = rows.filter(function (r) { return r.t < splitT; }); nTrainRows = tr0.length; tr0.forEach(function (r) { trainDateSet.add(r.t); });
+      var m0 = trainSoftmax(tr0.map(X), tr0.map(Y), opts); rows.forEach(function (r) { if (r.t >= splitT) scored.push({ r: r, p: m0.predict(r.x) }); });
+    }
+    var train = rows.filter(function (r) { return r.t + horizon * DAY <= splitT; }); if (train.length < 200) train = rows.filter(function (r) { return r.t < splitT; });
+    var test = scored.map(function (s) { return s.r; });
     // evaluate
     var conf = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], correct = 0, base = [0, 0, 0];
-    var scored = test.map(function (r) { var p = m.predict(r.x); var pred = p.indexOf(Math.max(p[0], p[1], p[2])); conf[r.y][pred]++; if (pred === r.y) correct++; base[r.y]++; return { r: r, p: p }; });
+    scored.forEach(function (s) { var p = s.p, r = s.r; var pred = p.indexOf(Math.max(p[0], p[1], p[2])); conf[r.y][pred]++; if (pred === r.y) correct++; base[r.y]++; });
     var majority = Math.max(base[0], base[1], base[2]) / test.length;
     var momOK = 0; test.forEach(function (r) { var pred = (r.daysSince <= 14 && r.lastDir === 1) ? 1 : (r.daysSince <= 14 && r.lastDir === -1) ? 2 : 0; if (pred === r.y) momOK++; });
     function precAt(cls, k) { var s = scored.slice().sort(function (a, b) { return b.p[cls] - a.p[cls]; }).slice(0, k); var hit = 0; s.forEach(function (x) { if (x.r.y === cls) hit++; }); return { k: Math.min(k, s.length), hit: hit, prec: s.length ? hit / s.length : 0, meanP: mean(s.map(function (x) { return x.p[cls]; })) }; }
     function f1(cls) { var tp = conf[cls][cls], fp = 0, fn = 0; for (var i = 0; i < 3; i++) { if (i !== cls) { fp += conf[i][cls]; fn += conf[cls][i]; } } var pr = tp + fp ? tp / (tp + fp) : 0, rc = tp + fn ? tp / (tp + fn) : 0; return pr + rc ? 2 * pr * rc / (pr + rc) : 0; }
-    var calib = []; for (var b = 0; b < 5; b++) calib.push({ lo: b / 5, hi: (b + 1) / 5, n: 0, sumP: 0, hits: 0 });
-    scored.forEach(function (s) { var p = s.p[1], b = Math.min(4, Math.floor(p * 5)); calib[b].n++; calib[b].sumP += p; if (s.r.y === 1) calib[b].hits++; });
+    function calibBins(cls) { var c = []; for (var b = 0; b < 5; b++) c.push({ lo: b / 5, hi: (b + 1) / 5, n: 0, sumP: 0, hits: 0 }); scored.forEach(function (s) { var p = s.p[cls], b = Math.min(4, Math.floor(p * 5)); c[b].n++; c[b].sumP += p; if (s.r.y === cls) c[b].hits++; }); return c; }
+    var calib = calibBins(1), calibDown = calibBins(2);
+    // monotone (pool-adjacent-violators) piecewise-linear map from the model's probability to the share that actually moved in the test
+    function makeCalibrator(bins) {
+      var pts = bins.filter(function (b) { return b.n >= 20; }).map(function (b) { return { x: b.sumP / b.n, y: b.hits / b.n, w: b.n }; });
+      if (pts.length < 2) return function (p) { return p; };
+      var i = 0; while (i < pts.length - 1) { if (pts[i].y > pts[i + 1].y) { var a = pts[i], c = pts[i + 1], w = a.w + c.w; pts.splice(i, 2, { x: (a.x * a.w + c.x * c.w) / w, y: (a.y * a.w + c.y * c.w) / w, w: w }); i = Math.max(0, i - 1); } else i++; }
+      pts = [{ x: 0, y: 0 }].concat(pts, [{ x: 1, y: 1 }]);
+      return function (p) { for (var k = 1; k < pts.length; k++) { if (p <= pts[k].x) { var a = pts[k - 1], c = pts[k]; return c.x === a.x ? c.y : a.y + (c.y - a.y) * (p - a.x) / (c.x - a.x); } } return 1; };
+    }
+    var calUp = makeCalibrator(calib), calDown = makeCalibrator(calibDown);
     // expected move per tier from training rows
     // typical size of a move per tier: median (robust to the handful of huge drops) and capped at ±25%
     function median(a) { if (!a.length) return null; var s = a.slice().sort(function (x, y) { return x - y; }); var m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
@@ -158,55 +208,78 @@
     // refit on everything for live predictions
     var full = trainSoftmax(rows.map(function (r) { return r.x; }), rows.map(function (r) { return r.y; }), opts);
     var weights = FEATURE_NAMES.map(function (nm, j) { return { feature: nm, up: full.W[1][j + 1] - full.W[0][j + 1], down: full.W[2][j + 1] - full.W[0][j + 1] }; });
-    return { ok: true, horizonDays: horizon, rows: rows.length, nTrain: train.length, nTest: test.length, asOfDates: dates.length, splitDate: new Date(splitT).toISOString().slice(0, 10), firstAsOf: new Date(dates[0]).toISOString().slice(0, 10), lastAsOf: new Date(dates[dates.length - 1]).toISOString().slice(0, 10),
+    function binsOut(c) { return c.map(function (b) { return { range: b.lo.toFixed(1) + '–' + b.hi.toFixed(1), n: b.n, meanP: b.n ? b.sumP / b.n : null, observed: b.n ? b.hits / b.n : null }; }); }
+    return { ok: true, horizonDays: horizon, rows: rows.length, nTrain: nTrainRows, nTrainDates: trainDateSet.size, nTest: test.length, nTestDates: testDates.length, embargo: embargo, asOfDates: dates.length, splitDate: new Date(splitT).toISOString().slice(0, 10), firstAsOf: new Date(dates[0]).toISOString().slice(0, 10), lastAsOf: new Date(dates[dates.length - 1]).toISOString().slice(0, 10),
       baseRates: { flat: base[0] / test.length, up: base[1] / test.length, down: base[2] / test.length },
       metrics: { accuracy: correct / test.length, majorityBaseline: majority, momentumBaseline: momOK / test.length, macroF1: (f1(0) + f1(1) + f1(2)) / 3, f1Up: f1(1), f1Down: f1(2), precUp50: precAt(1, 50), precDown50: precAt(2, 50), precUp100: precAt(1, 100), precDown100: precAt(2, 100) },
-      confusion: conf, calibration: calib.map(function (c) { return { range: c.lo.toFixed(1) + '–' + c.hi.toFixed(1), n: c.n, meanP: c.n ? c.sumP / c.n : null, observed: c.n ? c.hits / c.n : null }; }),
+      confusion: conf, calibration: binsOut(calib), calibrationDown: binsOut(calibDown), calibrate: function (cls, p) { return clamp(cls === 2 ? calDown(p) : cls === 1 ? calUp(p) : p, 0, 1); },
       moves: moves, weights: weights, model: full, predict: full.predict };
   }
 
   /* ---------------- market signals from listings & completed trades ---------------- */
-  function reputation(profiles, uid) { var p = profiles[uid]; if (!p || p.completed == null) return 0.5; return clamp(0.3 + p.completed / 20, 0.3, 1.0); }
+  // trust in a trader's completed trades: unknown accounts get the LEAST weight (an alt whose profile was never seen is not a known newcomer);
+  // known accounts earn weight slowly with accepted trades, lose it with failed ones, and need a two-week-old account
+  var REP_UNKNOWN = 0.2;
+  function reputation(profiles, uid) {
+    var p = profiles[uid]; if (!p || p.accepted == null) return REP_UNKNOWN;
+    var acc = p.accepted || 0, fail = p.failed || 0, joined = p.joined ? Date.parse(p.joined) : NaN, ageD = isFinite(joined) ? daysBetween(joined, Date.now()) : 0;
+    if (acc < 3 || ageD < 14) return REP_UNKNOWN;
+    var w = Math.min(1, Math.log1p(acc) / Math.log1p(30)) * (acc / (acc + fail + 1)) * Math.min(1, ageD / 30);
+    return clamp(w, REP_UNKNOWN, 1);
+  }
+  var LISTING_GATE = 0.7, TRADE_GATE = 1.0, WINSOR = 0.35; // log-ratio gates: listings beyond 2x and trades beyond 2.7x are ignored; the rest is clipped at ±42%
   function buildMarket(ctx) {
     var byName = ctx.byName, sig = new Map();
-    function S(name) { if (!sig.has(name)) sig.set(name, { name: name, offers: 0, wants: 0, offersByVariant: {}, wantsByVariant: {}, overpay: [], ask: [], trades: [], perUser: {}, completedOffered: 0, completedWanted: 0 }); return sig.get(name); }
+    function S(name) { if (!sig.has(name)) sig.set(name, { name: name, offers: 0, wants: 0, offersRaw: 0, wantsRaw: 0, offersByVariant: {}, wantsByVariant: {}, offerUsers: {}, wantUsers: {}, askUsers: {}, overpay: [], ask: [], trades: [], perUser: {}, posters: new Set(), tiers: {}, completedOffered: 0, completedWanted: 0 }); return sig.get(name); }
     var unknown = new Map(); function unk(n) { unknown.set(n, (unknown.get(n) || 0) + 1); }
     var pricedListings = 0, pricedCompleted = 0;
     ctx.listings.forEach(function (l) {
-      l.offering.forEach(function (e) { if (!e.name) return; if (!byName.has(e.name)) { unk(e.name); return; } var s = S(e.name); s.offers++; var v = e.type || ''; s.offersByVariant[v] = (s.offersByVariant[v] || 0) + 1; });
-      l.lookingFor.forEach(function (e) { if (!e.name) return; if (!byName.has(e.name)) { unk(e.name); return; } var s = S(e.name); s.wants++; var v = e.type || ''; s.wantsByVariant[v] = (s.wantsByVariant[v] || 0) + 1; });
+      var uid = l.uid || 'anon';
+      // counts are DISTINCT posters (a trader spamming the same want ten times counts once); raw counts are kept for display
+      l.offering.forEach(function (e) { if (!e.name) return; if (!byName.has(e.name)) { unk(e.name); return; } var s = S(e.name), v = e.type || ''; s.offersRaw++; var k = v + '|' + uid; if (!s.offerUsers[k]) { s.offerUsers[k] = 1; s.offers++; s.offersByVariant[v] = (s.offersByVariant[v] || 0) + 1; } });
+      l.lookingFor.forEach(function (e) { if (!e.name) return; if (!byName.has(e.name)) { unk(e.name); return; } var s = S(e.name), v = e.type || ''; s.wantsRaw++; var k = v + '|' + uid; if (!s.wantUsers[k]) { s.wantUsers[k] = 1; s.wants++; s.wantsByVariant[v] = (s.wantsByVariant[v] || 0) + 1; } });
       var off = priceSide(l.offering, byName), lf = priceSide(l.lookingFor, byName);
       if (off.ok && lf.ok && off.total > 0 && lf.total > 0) {
-        pricedListings++; var r = Math.log(off.total / lf.total); if (Math.abs(r) > 1.5) return; // ignore absurd asks
-        lf.parts.forEach(function (p) { if (p.fixed) return; S(p.name).ask.push({ r: r * (p.value / lf.total), w: 0.3 }); });
-        off.parts.forEach(function (p) { if (p.fixed) return; S(p.name).ask.push({ r: -r * (p.value / off.total), w: 0.3 }); });
+        pricedListings++; var r = Math.log(off.total / lf.total); if (Math.abs(r) > LISTING_GATE) return; r = clamp(r, -WINSOR, WINSOR);
+        function ask(p, sign, tot) { if (p.fixed) return; var s = S(p.name); var c = s.askUsers[uid] = (s.askUsers[uid] || 0) + 1; if (c > 2) return; s.ask.push({ r: sign * r * (p.value / tot), w: 0.3 }); }
+        lf.parts.forEach(function (p) { ask(p, 1, lf.total); }); off.parts.forEach(function (p) { ask(p, -1, off.total); });
       }
     });
     ctx.completed.forEach(function (c) {
-      var off = priceSide(c.offering, byName), lf = priceSide(c.lookingFor, byName);
+      var off = priceSide(c.offering, byName), lf = priceSide(c.lookingFor, byName), uid = c.uid || 'anon';
       c.offering.forEach(function (e) { if (e.name && byName.has(e.name)) S(e.name).completedOffered++; else if (e.name) unk(e.name); });
       c.lookingFor.forEach(function (e) { if (e.name && byName.has(e.name)) S(e.name).completedWanted++; else if (e.name) unk(e.name); });
       if (!(off.ok && lf.ok && off.total > 0 && lf.total > 0)) return;
       pricedCompleted++;
-      var r = Math.log(off.total / lf.total); if (Math.abs(r) > 1.5) return;
-      var w = reputation(ctx.profiles, c.uid), t = Date.parse(c.t), age = isFinite(t) ? daysBetween(t, ctx.now) : 30; w *= Math.exp(-Math.max(0, age) / 45);
-      function add(p, sign, side) { if (p.fixed) return; var s = S(p.name); var cnt = s.perUser[c.uid] = (s.perUser[c.uid] || 0) + 1; if (cnt > 3) return; s.overpay.push({ r: sign * r * (p.value / (sign > 0 ? lf.total : off.total)), w: w }); s.trades.push({ id: c.id, t: c.t, side: side, r: r, w: w, offering: off.parts.map(function (q) { return q.label; }), lookingFor: lf.parts.map(function (q) { return q.label; }), offTotal: off.total, lfTotal: lf.total }); }
-      lf.parts.forEach(function (p) { add(p, 1, 'wanted'); });
-      off.parts.forEach(function (p) { add(p, -1, 'offered'); });
+      var r = Math.log(off.total / lf.total); if (Math.abs(r) > TRADE_GATE) return; var rw = clamp(r, -WINSOR, WINSOR);
+      var w = reputation(ctx.profiles, uid), t = Date.parse(c.t), age = isFinite(t) ? daysBetween(t, ctx.now) : 30; w *= Math.exp(-Math.max(0, age) / 45);
+      // ONE observation per (trade, item): the item's net share of the trade (wanted shares minus offered shares), so a pet on both sides nets out
+      var share = new Map();
+      function acc(p, sign, tot) { if (p.fixed) return; var o = share.get(p.name); if (!o) { o = { net: 0, wanted: 0, offered: 0, tiers: {} }; share.set(p.name, o); } var sh = sign * p.value / tot; o.net += sh; if (sign > 0) o.wanted++; else o.offered++; o.tiers[p.tier] = (o.tiers[p.tier] || 0) + sh; }
+      lf.parts.forEach(function (p) { acc(p, 1, lf.total); }); off.parts.forEach(function (p) { acc(p, -1, off.total); });
+      share.forEach(function (o, name) {
+        var s = S(name); var cnt = s.perUser[uid] = (s.perUser[uid] || 0) + 1; if (cnt > 2) return; // at most two trades per trader per item count
+        s.posters.add(uid); s.overpay.push({ r: rw * o.net, w: w });
+        Object.keys(o.tiers).forEach(function (tf) { var tt = s.tiers[tf] || (s.tiers[tf] = { overpay: [], n: 0, posters: new Set() }); tt.overpay.push({ r: rw * o.tiers[tf], w: w }); tt.n++; tt.posters.add(uid); });
+        s.trades.push({ id: c.id, t: c.t, side: o.wanted && o.offered ? 'both' : o.wanted ? 'wanted' : 'offered', r: r, w: w, offering: off.parts.map(function (q) { return q.label; }), lookingFor: lf.parts.map(function (q) { return q.label; }), offTotal: off.total, lfTotal: lf.total });
+      });
     });
     // aggregate with shrinkage
+    function shrink(arr, k) { var sw = 0, swr = 0; arr.forEach(function (o) { sw += o.w; swr += o.w * o.r; }); return { adj: sw ? swr / (sw + k) : 0, mean: sw ? swr / sw : null, sw: sw }; }
     var rows = [];
     sig.forEach(function (s) {
       // shrink toward zero: one or two lopsided trades should not dominate (k = 4 trade-weights of prior)
-      var sw = 0, swr = 0; s.overpay.forEach(function (o) { sw += o.w; swr += o.w * o.r; }); s.overpayAdj = sw ? swr / (sw + 4) : 0; s.overpayN = s.overpay.length; s.overpayMean = sw ? swr / sw : null;
-      var aw = 0, awr = 0; s.ask.forEach(function (o) { aw += o.w; awr += o.w * o.r; }); s.askAdj = aw ? awr / (aw + 5) : 0; s.askN = s.ask.length;
+      var ov = shrink(s.overpay, 4); s.overpayAdj = ov.adj; s.overpayN = s.overpay.length; s.overpayMean = ov.mean; s.postersN = s.posters.size;
+      var ak = shrink(s.ask, 5); s.askAdj = ak.adj; s.askN = s.ask.length;
+      Object.keys(s.tiers).forEach(function (tf) { var tt = s.tiers[tf], sv = shrink(tt.overpay, 4); tt.adj = sv.adj; tt.mean = sv.mean; tt.postersN = tt.posters.size; delete tt.posters; });
       s.wantRatio = Math.log((s.wants + 1) / (s.offers + 1));
       s.activity = s.offers + s.wants + s.completedOffered + s.completedWanted;
+      delete s.offerUsers; delete s.wantUsers; delete s.askUsers; delete s.perUser; delete s.posters;
       if (s.activity > 0) rows.push(s);
     });
     function zs(field) { var vals = rows.map(function (s) { return s[field]; }); var m = mean(vals), sd = std(vals, m); rows.forEach(function (s) { s[field + 'Z'] = (s[field] - m) / sd; }); }
     zs('overpayAdj'); zs('askAdj'); zs('wantRatio');
-    rows.forEach(function (s) { s.pressure = 0.45 * s.overpayAdjZ + 0.35 * s.wantRatioZ + 0.20 * s.askAdjZ; var n = s.overpayN + 0.3 * (s.offers + s.wants); s.confidence = n / (n + 6); s.strength = s.pressure * s.confidence; delete s.perUser; });
+    rows.forEach(function (s) { s.pressure = 0.45 * s.overpayAdjZ + 0.35 * s.wantRatioZ + 0.20 * s.askAdjZ; var n = s.overpayN + 0.3 * (s.offers + s.wants); s.confidence = n / (n + 6) * Math.min(1, (s.postersN + 0.5 * Math.min(s.offers + s.wants, 6)) / 3); s.strength = s.pressure * s.confidence; });
     var unknownList = Array.from(unknown.entries()).sort(function (a, b) { return b[1] - a[1]; }).map(function (e) { return { name: e[0], count: e[1] }; });
     return { signals: sig, active: rows.length, pricedListings: pricedListings, pricedCompleted: pricedCompleted, unknownNames: unknownList };
   }
@@ -214,18 +287,21 @@
   /* ---------------- implied values from completed trades ---------------- */
   function solveImplied(ctx, opts) {
     var byName = ctx.byName, lambda = opts.lambda || 0.5, delta = 0.25, iters = opts.iters || 300, lr = opts.lr || 0.5;
-    var eqs = [];
+    var eqs = [], perUid = {};
+    var VALUE_FLOOR = 0.001; // items below this (eggs, sealers, "adds") are not solved for: too cheap for their share of a trade to say anything
     ctx.completed.forEach(function (c) {
-      var off = priceSide(c.offering, byName), lf = priceSide(c.lookingFor, byName);
+      var off = priceSide(c.offering, byName), lf = priceSide(c.lookingFor, byName), uid = c.uid || 'anon';
       if (!(off.ok && lf.ok && off.total > 0 && lf.total > 0)) return;
-      if (Math.abs(Math.log(off.total / lf.total)) > 1.5) return;
+      if (Math.abs(Math.log(off.total / lf.total)) > TRADE_GATE) return;
+      var k = perUid[uid] = (perUid[uid] || 0) + 1; if (k > 6) return; // one trader contributes at most six equations, each weaker than the last
       var t = Date.parse(c.t), age = isFinite(t) ? daysBetween(t, ctx.now) : 30;
-      eqs.push({ w: reputation(ctx.profiles, c.uid) * Math.exp(-Math.max(0, age) / 45), off: off.parts, lf: lf.parts });
+      eqs.push({ w: reputation(ctx.profiles, uid) * Math.exp(-Math.max(0, age) / 45) / Math.sqrt(k), off: off.parts, lf: lf.parts, uid: uid });
     });
-    var count = new Map(); eqs.forEach(function (e) { e.off.concat(e.lf).forEach(function (p) { if (!p.fixed) count.set(p.key, (count.get(p.key) || 0) + 1); }); });
-    var keys = Array.from(count.keys()).filter(function (k) { return count.get(k) >= 2; }), idx = new Map(); keys.forEach(function (k, i) { idx.set(k, i); });
+    var count = new Map(), posters = new Map();
+    eqs.forEach(function (e) { e.off.concat(e.lf).forEach(function (p) { if (p.fixed || p.value < VALUE_FLOOR) return; count.set(p.key, (count.get(p.key) || 0) + 1); if (!posters.has(p.key)) posters.set(p.key, new Set()); posters.get(p.key).add(e.uid); }); });
+    var keys = Array.from(count.keys()).filter(function (k) { return count.get(k) >= 2 && posters.get(k).size >= 2; }), idx = new Map(); keys.forEach(function (k, i) { idx.set(k, i); });
     var x0 = keys.map(function (k) { var nm = k.split('|'), it = byName.get(nm[0]); return Math.log(it.cat === 'Pets' ? it.values[nm[1]] : it.values.v); }), x = x0.slice();
-    if (!keys.length) return { keys: [], eqs: eqs.length, results: [] };
+    if (!keys.length) return { keys: 0, eqs: eqs.length, results: [], finalLoss: 0, byKey: new Map() };
     function sideVal(parts) { var s = 0; parts.forEach(function (p) { var i = idx.get(p.key); s += (i == null) ? p.value : Math.exp(x[i]); }); return s; }
     // diagonal preconditioner: total equation weight touching each unknown, so heavily traded items take steps of the same size as rare ones
     var deg = new Array(keys.length).fill(0);
@@ -241,7 +317,7 @@
       });
       for (var i = 0; i < keys.length; i++) { g[i] += 2 * lambda * (x[i] - x0[i]); x[i] -= clamp(lr * g[i] / (deg[i] + 2 * lambda), -0.1, 0.1); x[i] = clamp(x[i], x0[i] - 0.7, x0[i] + 0.7); }
     }
-    var results = keys.map(function (k, i) { var nm = k.split('|'); return { key: k, name: nm[0], variant: nm[1], listed: Math.exp(x0[i]), implied: Math.exp(x[i]), gap: Math.exp(x[i] - x0[i]) - 1, n: count.get(k) }; });
+    var results = keys.map(function (k, i) { var nm = k.split('|'); return { key: k, name: nm[0], variant: nm[1], listed: Math.exp(x0[i]), implied: Math.exp(x[i]), gap: Math.exp(x[i] - x0[i]) - 1, n: count.get(k), posters: posters.get(k).size }; });
     results.sort(function (a, b) { return Math.abs(b.gap) * Math.log(1 + b.n) - Math.abs(a.gap) * Math.log(1 + a.n); });
     return { keys: keys.length, eqs: eqs.length, results: results, finalLoss: loss, byKey: new Map(results.map(function (r) { return [r.key, r]; })) };
   }
@@ -259,11 +335,15 @@
         var p = hist.ok ? hist.predict(f.x) : [1, 0, 0]; var tier = tierOf(v), mv = hist.ok ? hist.moves[tier] : { up: 0.08, down: -0.08 };
         var eHist = p[1] * mv.up + p[2] * mv.down;
         var s = market.signals.get(it.name), imp = implied.byKey ? implied.byKey.get(it.name + '|' + T.field) : null;
-        var conf = s ? s.confidence : 0, eMarket = 0, reasons = [];
-        if (imp && imp.n >= 3) eMarket = clamp(imp.gap, -0.3, 0.3) * (imp.n / (imp.n + 4));
+        var offeredNow = s ? (isPet ? sumCodes(s.offersByVariant, T.codes) : s.offers) : 0, wantedNow = s ? (isPet ? sumCodes(s.wantsByVariant, T.codes) : s.wants) : 0;
+        // market evidence is judged per tier: a heavily traded Regular pet lends its Mega row only half its confidence
+        var tt = s ? s.tiers[T.field] : null, nT = (tt ? tt.n : 0) + 0.3 * (offeredNow + wantedNow);
+        var confTier = tt ? nT / (nT + 6) * Math.min(1, (tt.postersN + 0.5 * Math.min(offeredNow + wantedNow, 6)) / 3) : 0;
+        var conf = s ? Math.max(confTier, 0.5 * s.confidence) : 0, eMarket = 0, reasons = [];
+        var impOK = imp && imp.n >= 3 && imp.posters >= 2;
+        if (impOK) eMarket = clamp(Math.log(1 + imp.gap), -0.3, 0.3) * (imp.n / (imp.n + 4));
         else if (s) eMarket = clamp(s.pressure, -3, 3) * 0.03;
         var wM = 0.55 * conf, e = (1 - wM) * eHist + wM * eMarket;
-        var offeredNow = s ? (isPet ? sumCodes(s.offersByVariant, T.codes) : s.offers) : 0, wantedNow = s ? (isPet ? sumCodes(s.wantsByVariant, T.codes) : s.wants) : 0;
         // reasons (only real, observed facts)
         var tl = T.label ? T.label + ' ' : '';
         if (f.n30 > 0) reasons.push(tl + (f.n30 === 1 ? 'value updated once' : 'value updated ' + f.n30 + ' times') + ' in the last 30 days (' + fmtPct(Math.exp(f.chg30) - 1) + ')');
@@ -271,17 +351,20 @@
         if (Math.abs(f.streak) >= 2) reasons.push(Math.abs(f.streak) + ' consecutive ' + (f.streak > 0 ? 'raises' : 'drops'));
         if (f.chg90 && Math.abs(Math.exp(f.chg90) - 1) >= 0.05) reasons.push('90-day change ' + fmtPct(Math.exp(f.chg90) - 1));
         if (s) {
-          if (s.overpayN >= 3) reasons.push((s.overpayMean > 0 ? 'Overpaid' : 'Underpaid') + ' in completed trades (all tiers): avg ' + fmtPct(s.overpayMean) + ' across ' + s.overpayN + ' trade sides');
-          if (offeredNow + wantedNow >= 5) reasons.push((T.label || 'Item') + ' wanted ' + wantedNow + '× vs offered ' + offeredNow + '× in listings (last ' + (ctx.listingWindowHours || 48) + 'h)');
+          if (tt && tt.n >= 3) reasons.push((tt.mean > 0 ? 'Overpaid' : 'Underpaid') + ' for the ' + (T.label || 'item').toLowerCase() + ' in completed trades: avg ' + fmtPct(tt.mean) + ' across ' + tt.n + ' trades from ' + tt.postersN + ' traders');
+          else if (s.overpayN >= 3) reasons.push((s.overpayMean > 0 ? 'Overpaid' : 'Underpaid') + ' in completed trades (all tiers): avg ' + fmtPct(s.overpayMean) + ' across ' + s.overpayN + ' trades from ' + s.postersN + ' traders');
+          if (offeredNow + wantedNow >= 5) reasons.push((T.label || 'Item') + ' wanted by ' + wantedNow + ' traders vs offered by ' + offeredNow + ' in listings (last ' + (ctx.listingWindowHours || 48) + 'h)');
           if (s.askN >= 5 && Math.abs(s.askAdj) >= 0.02) reasons.push('Traders ' + (s.askAdj > 0 ? 'offer above' : 'ask below') + ' its value when listing (' + fmtPct(s.askAdj) + ')');
         }
-        if (imp && imp.n >= 3) reasons.push('Market-implied ' + (T.label ? T.label.toLowerCase() + ' ' : '') + 'value ' + roundValue(imp.implied) + ' vs listed ' + roundValue(imp.listed) + ' (' + fmtPct(imp.gap) + ', ' + imp.n + ' trades)');
-        // a call needs both a material expected move and a majority probability, or strong trade evidence
-        var strongImp = imp && imp.n >= 5 && Math.abs(imp.gap) >= 0.05;
+        if (impOK) reasons.push('Market-implied ' + (T.label ? T.label.toLowerCase() + ' ' : '') + 'value ' + roundValue(imp.implied) + ' vs listed ' + roundValue(imp.listed) + ' (' + fmtPct(imp.gap) + ', ' + imp.n + ' trades from ' + imp.posters + ' traders)');
+        // a call needs a material expected move AND either a majority probability from history or strong, multi-trader trade evidence
+        var strongImp = impOK && imp.n >= 5 && imp.posters >= 4 && Math.abs(imp.gap) >= 0.05 && imp.listed >= 0.005;
         var dir = 'flat';
-        if (e > 0.02 && (p[1] >= 0.5 || (strongImp && imp.gap > 0) || (p[1] >= 0.35 && conf >= 0.4))) dir = 'up';
-        else if (e < -0.02 && (p[2] >= 0.5 || (strongImp && imp.gap < 0) || (p[2] >= 0.35 && conf >= 0.4))) dir = 'down';
+        // the market path needs history not to argue against it: at least the base rate of that move (raises ~12%, drops ~4% of item-weeks)
+        if (e > 0.02 && (p[1] >= 0.5 || (strongImp && imp.gap > 0 && p[1] >= 0.12 && s.wantRatioZ > -0.75) || (p[1] >= 0.35 && conf >= 0.4))) dir = 'up';
+        else if (e < -0.02 && (p[2] >= 0.5 || (strongImp && imp.gap < 0 && p[2] >= 0.04) || (p[2] >= 0.3 && conf >= 0.4))) dir = 'down';
         var pDir = dir === 'up' ? p[1] : dir === 'down' ? p[2] : p[0];
+        var pUpCal = hist.ok ? hist.calibrate(1, p[1]) : p[1], pDownCal = hist.ok ? hist.calibrate(2, p[2]) : p[2];
         // trading opportunity scores: a rise only pays if the pet is in demand and actually changes hands
         var demand = it.demand[isPet ? T.field : 'v'];
         var liquidity = offeredNow + wantedNow + (s ? s.completedOffered + s.completedWanted : 0);
@@ -290,8 +373,8 @@
         var dumpScore = Math.max(0, -e) * (0.4 + 0.6 * p[2]) * (1 + Math.min(liquidity, 40) / 40) * (0.7 + 0.3 * conf);
         // every potion state inside this tier moves with it
         var subs = T.subs.filter(function (k) { return it.values[k] != null && it.values[k] > 0; }).map(function (k) { return { code: k, label: VARIANT_LABEL[k] || 'Value', value: it.values[k], predicted: roundValue(it.values[k] * Math.exp(e)) }; });
-        preds.push({ name: it.name, cat: it.cat, origin: it.origin, variant: T.label || 'Item', variantField: T.field, variantVar: T.v, key: it.name + '|' + T.field, value: v, tier: tier, demand: demand, lastUpdatedAt: it.lastUpdatedAt,
-          pFlat: p[0], pUp: p[1], pDown: p[2], eHist: eHist, eMarket: eMarket, marketWeight: wM, expectedMove: e, predicted: roundValue(v * Math.exp(e)), direction: dir,
+        preds.push({ name: it.name, cat: it.cat, origin: it.origin, variant: T.label || 'Item', variantField: T.field, variantVar: T.v, key: it.name + '|' + T.field, value: v, tier: tier, demand: demand, lastUpdatedAt: it.lastUpdatedAt, lastMovedAt: f.lastT ? new Date(f.lastT).toISOString() : null,
+          pFlat: p[0], pUp: p[1], pDown: p[2], pUpCal: pUpCal, pDownCal: pDownCal, eHist: eHist, eMarket: eMarket, marketWeight: wM, expectedMove: e, predicted: roundValue(v * Math.exp(e)), direction: dir, tierTrades: tt ? tt.n : 0, tierTraders: tt ? tt.postersN : 0,
           score: Math.abs(e) * (0.5 + 0.5 * pDir) * (0.6 + 0.4 * conf), marketConfidence: conf, marketPressure: s ? s.pressure : null, implied: imp || null, reasons: reasons, feat: f,
           liquidity: liquidity, offeredNow: offeredNow, wantedNow: wantedNow, flipScore: flipScore, dumpScore: dumpScore, gainAbs: v * (Math.exp(e) - 1), subs: subs });
       });
@@ -305,17 +388,22 @@
     options = options || {};
     var t0 = Date.now();
     var idx = indexItems(data.items);
-    var series = buildHistory(data.updates);
+    var hs = buildHistory(data.updates), series = hs.series;
     var now = Date.parse(data.meta.collectedAt) || Date.now();
+    // the public update log misses some changes: close every series on today's listed value so history and catalogue agree
+    var logGaps = 0;
+    data.items.forEach(function (it) { (it.cat === 'Pets' ? PET_TIERS : ITEM_TIERS).forEach(function (T) { var cur = it.values[T.field]; if (!(cur > 0)) return; var arr = series.get(it.name + '|' + T.v); if (!arr || !arr.length) return; var last = arr[arr.length - 1]; if (!(last.new > 0) || Math.abs(last.new - cur) / cur < 0.001) return; var t = Date.parse(it.lastUpdatedAt); if (!isFinite(t) || t <= last.t) t = last.t + 1; arr.push({ t: Math.min(t, now), prev: last.new, new: cur, synthetic: true }); logGaps++; }); });
     var firstT = data.updates.length ? Date.parse(data.updates[0].t) : now, lastT = data.updates.length ? Date.parse(data.updates[data.updates.length - 1].t) : now;
-    var ctx = { items: data.items, byName: idx.byName, series: series, valueAt: makeValueAt(series, idx.byName), now: now, histStart: Math.max(firstT, BASELESS_START), listings: data.listings, completed: data.completed, profiles: data.profiles || {}, listingWindowHours: data.meta.listingWindowHours || 48 };
+    var profiles = data.profiles || {}, profilesWithStats = 0; Object.keys(profiles).forEach(function (u) { if (profiles[u] && profiles[u].accepted != null) profilesWithStats++; });
+    var ctx = { items: data.items, byName: idx.byName, series: series, demandSeries: hs.demandSeries, valueAt: makeValueAt(series, idx.byName), demandAt: makeDemandAt(hs.demandSeries, idx.byName), now: now, histStart: Math.max(firstT, BASELESS_START), listings: data.listings, completed: data.completed, profiles: profiles, listingWindowHours: data.meta.listingWindowHours || 48 };
     var hist = buildHistoryModel(ctx, { iters: options.iters || 400, lr: 0.5, lambda: 1e-3 });
     var market = buildMarket(ctx);
     var implied = solveImplied(ctx, {});
     var preds = buildPredictions(ctx, hist, market, implied);
     var nUpd = 0; series.forEach(function (a) { nUpd += a.length; });
-    var summary = { items: data.items.length, predictionRows: preds.length, updateRows: nUpd, updatesFrom: new Date(firstT).toISOString().slice(0, 10), updatesTo: new Date(lastT).toISOString().slice(0, 10), historyDays: Math.round(daysBetween(ctx.histStart, now)), listings: data.listings.length, completed: data.completed.length, profiles: Object.keys(ctx.profiles).length,
+    var summary = { items: data.items.length, predictionRows: preds.length, updateRows: nUpd, logGaps: logGaps, updatesFrom: new Date(firstT).toISOString().slice(0, 10), updatesTo: new Date(lastT).toISOString().slice(0, 10), historyDays: Math.round(daysBetween(ctx.histStart, now)), listings: data.listings.length, completed: data.completed.length, profiles: Object.keys(profiles).length, profilesWithStats: profilesWithStats,
       pricedListings: market.pricedListings, pricedCompleted: market.pricedCompleted, impliedKeys: implied.keys, itemsWithMarket: market.active, collectedAt: data.meta.collectedAt, buildMs: Date.now() - t0, nameCollisions: idx.collisions, unknownNames: market.unknownNames.slice(0, 40),
+      listingGaps: (data.meta.listingGaps || []).length, degraded: !!(data.meta.run && data.meta.run.degraded), boundaryReached: !(data.meta.run && data.meta.run.listingBoundaryReached === false),
       raise: preds.filter(function (p) { return p.direction === 'up'; }).length, lower: preds.filter(function (p) { return p.direction === 'down'; }).length };
     function explorer(name) {
       var it = idx.byName.get(name); if (!it) return null;
@@ -323,11 +411,12 @@
       var tiers = (isPet ? PET_TIERS : ITEM_TIERS).map(function (T) {
         var hk = name + '|' + T.v, arr = series.get(hk) || [], pts = [], cur = it.values[T.field];
         if (cur == null) return null;
-        if (arr.length) { pts.push({ t: ctx.histStart, v: arr[0].t > ctx.histStart ? arr[0].prev : arr[0].new }); arr.forEach(function (u) { if (u.t >= ctx.histStart) pts.push({ t: u.t, v: u.new }); }); }
+        if (arr.length) { pts.push({ t: ctx.histStart, v: arr[0].t >= ctx.histStart ? arr[0].prev : lookupAt(arr, ctx.histStart) }); arr.forEach(function (u) { if (u.t >= ctx.histStart) pts.push({ t: u.t, v: u.new }); }); }
         else pts.push({ t: ctx.histStart, v: cur });
-        pts.push({ t: now, v: cur });
+        if (pts[pts.length - 1].t < now) pts.push({ t: now, v: cur });
         return { label: T.label || 'Value', field: T.field, v: T.v, series: pts, updates: arr.slice().reverse(), prediction: preds.find(function (p) { return p.name === name && p.variantField === T.field; }) || null, implied: implied.results.filter(function (r) { return r.name === name && r.variant === T.field; }) };
       }).filter(Boolean);
+      if (!tiers.length) return null;
       return { item: it, tiers: tiers, series: tiers[0].series, updates: tiers[0].updates, prediction: tiers[0].prediction, market: market.signals.get(name) || null, implied: implied.results.filter(function (r) { return r.name === name; }) };
     }
     return { summary: summary, history: hist, market: market, implied: implied, predictions: preds, explorer: explorer, ctx: ctx, featureNames: FEATURE_NAMES, tierOf: tierOf, roundValue: roundValue, variantLabel: VARIANT_LABEL, petTiers: PET_TIERS };
