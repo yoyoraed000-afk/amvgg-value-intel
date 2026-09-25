@@ -16,9 +16,11 @@ Pets get three predictions each, Regular (FR), Neon (NFR) and Mega (MFR), from t
 site/        index.html  – dashboard (no build step, no framework)
              engine.js   – the whole model; AMVGGEngine.build(data) in browser or Node
              data.json   – snapshot the dashboard runs on
-build/       collect.sh      – pulls values, the full update log, active listings and trader profiles (rate-limited, resumable)
-             rsc_extract.pl  – decodes the Next.js RSC payload embedded in the site's pages
-             build_data.pl   – merges raw pages into data.json
+build/       collect_incremental.sh – hourly collector (fetches what is new; bounded retries; FULL=1 for the deep pass)
+             collect.sh             – one-off full pull (first bootstrap)
+             rsc_extract.pl         – decodes the Next.js RSC payload embedded in the site pages
+             build_state.pl         – merges raw pages into the rolling store and writes data.json (guarded, atomic)
+             build_data.pl          – legacy one-shot builder for collect.sh output
 serve.ps1    tiny static server for local viewing (PowerShell, no dependencies)
 ```
 
@@ -40,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File serve.ps1
 
 ## Runs itself on GitHub Actions
 
-`.github/workflows/update.yml` runs every hour on GitHub's machines: it restores the rolling store from the `data` branch, fetches only what is new (`build/collect_incremental.sh`), merges it (`build/build_state.pl`), publishes `site/` to GitHub Pages, and force-pushes the store back to `data` as a single commit so the repo never grows. A deeper pass runs daily at 03:23 UTC (more listings, up to 800 trader profiles). Trigger a run by hand from the Actions tab ("Run workflow", tick *Deep pass* for the long version).
+`.github/workflows/update.yml` runs every hour on GitHub's machines: it restores the rolling store from the `data` branch, fetches only what is new (`build/collect_incremental.sh`), merges it (`build/build_state.pl`), publishes `site/` to GitHub Pages, and force-pushes the store back to `data` as a single commit so the repo never grows. The job runs a deeper pass by itself every ~20 hours (more listings, up to 800 trader profiles). Trigger a run by hand from the Actions tab ("Run workflow", tick *Deep pass* for the long version).
 
 Rolling store windows: every value update ever seen, listings from the last 12 hours (the page ships the last 6), completed trades from the last 60 days (the page ships 30), and one profile record per trader (refreshed at most daily, sooner when its stats are missing). Each run records whether it reached the previous listings; gaps are kept in the store and shown on the Overview.
 
