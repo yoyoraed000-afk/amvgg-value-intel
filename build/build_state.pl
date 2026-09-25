@@ -15,9 +15,10 @@ my $J = JSON::PP->new->canonical; my $now = time; my $nowIso = strftime('%Y-%m-%
 my @warnings;
 sub note { my $m = shift; push @warnings, $m; print STDERR "warning: $m\n" }
 sub slurp { my $f = shift; open(my $h, '<:raw', $f) or return undef; local $/; my $s = <$h>; close $h; $s }
-sub load_store { # missing file -> undef (fine); unreadable/corrupt file -> die (never treat as empty)
-    my $f = shift; return undef unless -e $f; my $s = slurp($f); die "corrupt store file $f (unreadable)\n" unless defined $s;
-    my $d = eval { $J->decode($s) }; die "corrupt store file $f: " . ($@ || 'not JSON') . "\n" unless defined $d; $d }
+sub fail { my ($code, $msg) = @_; print STDERR "$msg\n"; exit $code }   # the documented exit codes (die would exit with whatever errno holds)
+sub load_store { # missing file -> undef (fine); unreadable/corrupt file -> exit 2 (never treat as empty)
+    my $f = shift; return undef unless -e $f; my $s = slurp($f); fail(2, "corrupt store file $f (unreadable)") unless defined $s;
+    my $d = eval { $J->decode($s) }; fail(2, "corrupt store file $f: " . ($@ || 'not JSON')) unless defined $d; $d }
 sub load_raw { my $f = shift; my $s = slurp($f); return undef unless defined $s; eval { $J->decode($s) } }
 sub save { my ($f, $d) = @_; my $tmp = "$f.tmp"; open(my $h, '>:raw', $tmp) or die "write $tmp: $!"; print $h $J->encode($d); close $h or die "close $tmp: $!"; rename($tmp, $f) or die "rename $tmp -> $f: $!" }
 sub rsc { my ($file, $mode, $key) = @_; $key //= ''; my $s = `perl "$dir/rsc_extract.pl" "$file" $mode $key 2>/dev/null`; return $s ? eval { $J->decode($s) } : undef }
@@ -49,9 +50,8 @@ for my $p (sort keys %pages) {
     elsif ($prevN) { push @items, @{$prevByCat{$cat}}; push @itemFallback, $cat; note(sprintf("%s: page gave %d items (had %d); kept last known", $cat, scalar(@recs), $prevN)) }
     else { note("$cat: no items parsed and nothing known") }
 }
-die "no items at all and no store: nothing usable was fetched\n" if !@items && $firstRun;
-exit 4 if !@items;
-save("$state/items.json", \@items);
+fail(4, "no items at all and no store: nothing usable was fetched") if !@items;
+# items.json is saved with the other store files below: after the corrupt-store checks and the shrink guard, not before them
 my %itemByName = map { $_->{name} => $_ } @items;
 
 # ---------- updates: merge raw records by id (drop rows that carry neither a value nor a demand change) ----------
@@ -61,7 +61,7 @@ for my $f (sort glob("$raw/vu/*.json")) { my $j = load_raw($f) or next; for my $
 my @updRaw = sort { $b->{updatedAt} cmp $a->{updatedAt} } values %upd;
 
 # ---------- listings: merge by id, strip usernames, keep the rolling window ----------
-my %lst; my $prevL = load_store("$state/listings.json") || []; $lst{$_->{id}} = $_ for @$prevL;
+my %lst; my $prevL = load_store("$state/listings.json") || []; for (@$prevL) { delete $_->{authorName}; $lst{$_->{id}} = $_ }   # rows stored before the strip existed lose the username too
 my $newL = 0; my ($runOldest, $runNewest);
 for my $f (sort glob("$raw/trades/*.json")) { my $j = load_raw($f) or next; for my $t (@{$j->{trades} || []}) { delete $t->{authorName}; $newL++ unless $lst{$t->{id}}; $lst{$t->{id}} = $t; my $p = $t->{publishedAt} // ''; $runOldest = $p if !defined $runOldest || $p lt $runOldest; $runNewest = $p if !defined $runNewest || $p gt $runNewest } }
 my $lcut = iso_ago($LISTING_WINDOW_H * 3600);
@@ -69,7 +69,7 @@ my @lstRaw = sort { $b->{publishedAt} cmp $a->{publishedAt} } grep { ($_->{publi
 
 # ---------- profiles & completed trades ----------
 my $profiles = load_store("$state/profiles.json") || {}; my %cmp; my $prevC = load_store("$state/completed.json") || []; $cmp{$_->{id}} = $_ for @$prevC;
-my ($newP, $newC, $statsOk, $statsMiss) = (0, 0, 0, 0);
+my ($newP, $newC, $statsOk, $statsMiss, $unparsed) = (0, 0, 0, 0, 0);
 for my $f (sort glob("$raw/profiles/*.html")) {
     my ($uid) = $f =~ m{/(\d+)\.html$}; next unless $uid;
     my $html = slurp($f) or next; next if length($html) < 20000;
@@ -78,15 +78,24 @@ for my $f (sort glob("$raw/profiles/*.html")) {
     # the counters are separated from 'Joined <date>' by an optional bio, so parse each fact on its own
     ($p{joined}) = $text =~ /Joined ([A-Za-z]+ \d{1,2}, \d{4})/;
     my @c = $text =~ /(\d+) Posted (\d+) Accepted (\d+) Completed (\d+) Failed/;
-    if (@c == 4) { @p{qw(posted accepted completed failed)} = map { $_ + 0 } @c; $statsOk++ } else { $statsMiss++ }
     ($p{name}) = $html =~ /<title>([^<]+?)(?:&#x27;|')s Profile - Adopt Me Values/;
     ($p{completedTotal}) = $html =~ /completedTradesPagination\\?"?:\\?\{[^}]*?totalItems\\?"?:(\d+)/;
     $p{completedTotal} += 0 if defined $p{completedTotal};
+    # completed trades are harvested from whatever came back; the profile record only from a page that is actually a rendered profile
+    for my $t (@{ rsc($f, 'key', 'completedTrades') || [] }) { next unless $t->{completed}; $newC++ unless $cmp{$t->{id}}; $cmp{$t->{id}} = { id => $t->{id}, uid => $uid, publishedAt => $t->{publishedAt}, offering => $t->{offering}, lookingFor => $t->{lookingFor} } }
+    if (!defined $p{joined} && !defined $p{name} && @c != 4) {
+        # not a profile (challenge page, soft 404, login wall): keep what we knew, leave fetchedAt alone so the collector retries the uid next
+        # run instead of turning a known trader into an "unknown" one, and keep one sample for the workflow artifacts so the cause can be seen
+        $unparsed++; if ($unparsed == 1 && open(my $o, '>:raw', "$raw/profile-unparsed.html")) { print $o $html; close $o }
+        next;
+    }
+    if (@c == 4) { @p{qw(posted accepted completed failed)} = map { $_ + 0 } @c; $statsOk++ }
+    else { $statsMiss++; my $old = $profiles->{$uid} || {}; for my $k (qw(posted accepted completed failed)) { $p{$k} = $old->{$k} if defined $old->{$k} } } # rendered, counters not found: keep the last parsed counters
     $newP++ unless $profiles->{$uid};
     $profiles->{$uid} = \%p;
-    for my $t (@{ rsc($f, 'key', 'completedTrades') || [] }) { next unless $t->{completed}; $newC++ unless $cmp{$t->{id}}; $cmp{$t->{id}} = { id => $t->{id}, uid => $uid, publishedAt => $t->{publishedAt}, offering => $t->{offering}, lookingFor => $t->{lookingFor} } }
 }
-note("profile stats parsed for $statsOk of " . ($statsOk + $statsMiss) . " fetched profiles") if $statsMiss > $statsOk;
+note("profile stats parsed for $statsOk of " . ($statsOk + $statsMiss) . " rendered profiles") if $statsMiss > $statsOk;
+note("$unparsed of " . ($statsOk + $statsMiss + $unparsed) . " profile pages were not rendered profiles (known records kept; sample in build/raw/profile-unparsed.html)") if $unparsed && $unparsed >= 0.3 * ($statsOk + $statsMiss + $unparsed);
 my $ccut = iso_ago($COMPLETED_WINDOW_D * 86400);
 my @cmpRaw = sort { $a->{publishedAt} cmp $b->{publishedAt} } grep { ($_->{publishedAt} // '') ge $ccut } values %cmp;
 # prune profiles nobody references any more (no completed trade in the window and not fetched for a window's length)
@@ -102,7 +111,7 @@ if (!$firstRun && !$ENV{FORCE_RESET}) {
         if ($counts{$k} < 0.5 * $pc->{$k}) { print STDERR "refusing to save: $k shrank from $pc->{$k} to $counts{$k} (set FORCE_RESET=1 to allow)\n"; exit 3 }
     }
 }
-save("$state/updates.json", \@updRaw); save("$state/listings.json", \@lstRaw); save("$state/profiles.json", $profiles); save("$state/completed.json", \@cmpRaw);
+save("$state/items.json", \@items); save("$state/updates.json", \@updRaw); save("$state/listings.json", \@lstRaw); save("$state/profiles.json", $profiles); save("$state/completed.json", \@cmpRaw);
 
 # ---------- data.json for the engine ----------
 sub norm_side { my $arr = shift; my @o;
@@ -142,18 +151,24 @@ my %prof; my $profStats = 0;
 for my $u (grep { $ship{$_} } keys %$profiles) { my $p = $profiles->{$u}; $prof{$u} = { map { my $k = $_; ($k => $p->{$k}) } grep { $_ ne 'fetchedAt' } keys %$p }; $profStats++ if defined $p->{completed} }
 die "profile export produced no stats although " . scalar(keys %prof) . " profiles were exported\n" if keys(%prof) >= 50 && $profStats == 0;
 
-# listing coverage: only advance the boundary when this run actually reached the previous one (or this is the first run)
+# listing coverage: the boundary advances when this run reached the previous one (its pages extend back past it, or the collector says so and
+# the boundary is still inside the store window) and never moves backwards. A boundary older than the store window cannot be reached usefully
+# (everything behind it would be dropped anyway) and would otherwise stay frozen forever after an outage: it is abandoned, the hole is recorded
+# as a gap and the boundary jumps to this run's newest listing. Without run.json (collector killed) a run counts as NOT reached.
 my $prevBoundary = $prevMeta->{newestListingAt};
-my $reached = $firstRun || !$prevBoundary || ($run->{listingBoundaryReached} // 1) ? 1 : 0;
-my $newestListingAt = $reached ? ($runNewest // $prevBoundary) : $prevBoundary;
+my $expired = defined $prevBoundary && $prevBoundary lt $lcut;
+my $covered = defined $prevBoundary && defined $runOldest && $runOldest le $prevBoundary;
+my $reached = ($firstRun || !$prevBoundary || $covered || (!$expired && ($run->{listingBoundaryReached} // 0))) ? 1 : 0;
+my $newestListingAt = $prevBoundary;
+$newestListingAt = $runNewest if ($reached || $expired) && defined $runNewest && (!defined $prevBoundary || $runNewest gt $prevBoundary);
 my @gaps = @{$prevMeta->{listingGaps} || []};
-push @gaps, { from => $prevBoundary, to => $runOldest, run => $nowIso } if !$reached && defined $runOldest;
+push @gaps, { from => $prevBoundary, to => $runOldest, run => $nowIso, ($expired ? (expired => JSON::PP::true) : ()) } if !$reached && defined $prevBoundary && defined $runOldest && $runOldest gt $prevBoundary;
 @gaps = grep { ($_->{to} // '') ge $lcut } @gaps;
 
 my $meta = { collectedAt => $nowIso, listingWindowHours => $DATA_LISTING_H, completedWindowDays => $DATA_COMPLETED_D, storeListingHours => $LISTING_WINDOW_H, storeCompletedDays => $COMPLETED_WINDOW_D,
              counts => { items => scalar(@items), updates => scalar(@updates), listings => scalar(@listings), completed => scalar(@completed), profiles => scalar(keys %prof), profilesWithStats => $profStats, syntheticUpdates => $synthetic },
              updatesFrom => (@updates ? $updates[0]{t} : undef), updatesTo => (@updates ? $updates[-1]{t} : undef),
-             run => { newUpdates => $newU, newListings => $newL, newCompleted => $newC, newProfiles => $newP, itemFallback => \@itemFallback, listingBoundaryReached => $reached, degraded => ($run->{degraded} ? JSON::PP::true : JSON::PP::false), failedFetches => ($run->{failed} // 0) + 0, warnings => \@warnings },
+             run => { newUpdates => $newU, newListings => $newL, newCompleted => $newC, newProfiles => $newP, itemFallback => \@itemFallback, listingBoundaryReached => ($reached ? JSON::PP::true : JSON::PP::false), unparsedProfiles => $unparsed, degraded => ($run->{degraded} ? JSON::PP::true : JSON::PP::false), failedFetches => ($run->{failed} // 0) + 0, warnings => \@warnings },
              listingGaps => \@gaps };
 save($out, { meta => $meta, items => \@items, updates => \@updates, listings => \@listings, completed => \@completed, profiles => \%prof });
 save("$state/meta.json", { lastRun => $nowIso, newestUpdateAt => (@updRaw ? $updRaw[0]{updatedAt} : $prevMeta->{newestUpdateAt}), newestListingAt => $newestListingAt, listingGaps => \@gaps, storeCounts => \%counts, lastDeepRun => ($ENV{FULL} && $ENV{FULL} eq '1') ? $nowIso : $prevMeta->{lastDeepRun} });

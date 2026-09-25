@@ -44,14 +44,23 @@ get() { # url out sleep kind -> 0 on a complete, valid body. Retries are bounded
   FAILED=$((FAILED + 1)); return 1
 }
 jq_() { perl -MJSON::PP -e '$/=undef; my $j=eval{decode_json(<STDIN>)}; exit 1 unless $j; my $c=$ARGV[0]; eval $c; die $@ if $@;' "$1" < "$2"; }
-finish() { # write run.json and exit with the given status
+write_run() { # run.json describes this run's listing coverage for build_state.pl: written after the listing phase and again at the end
   perl -e 'printf "{\"listingBoundaryReached\":%s,\"oldestListingFetched\":%s,\"newestListingFetched\":%s,\"failed\":%d,\"degraded\":%s,\"retrySeconds\":%d,\"finishedAt\":\"%s\"}\n", $ARGV[0]?"true":"false", ($ARGV[1] ne ""?"\"$ARGV[1]\"":"null"), ($ARGV[2] ne ""?"\"$ARGV[2]\"":"null"), $ARGV[3], $ARGV[4]?"true":"false", $ARGV[5], $ARGV[6]' "$REACHED" "$OLDEST" "$NEWEST" "$FAILED" "$DEGRADED" "$RETRY_SPENT" "$(date -u +%FT%TZ)" > "$RAW/run.json"
+}
+finish() { # write run.json and exit with the given status
+  write_run
   echo "DONE $(date -u +%FT%TZ) updates_pages=$UPAGES listing_pages=$LPAGES profiles=$PROFILES_DONE failed=$FAILED degraded=$DEGRADED boundary_reached=$REACHED" | tee -a "$LOG"
   exit "$1"
 }
 REACHED=1; OLDEST=""; NEWEST=""; UPAGES=0; LPAGES=0; PROFILES_DONE=0
+# the workflow's timeout sends TERM: leave an honest run.json (what was fetched so far, flagged degraded) instead of the failed-run fallback
+trap 'DEGRADED=1; finish 0' TERM INT
 newest_update=$(perl -MJSON::PP -e '$/=undef; my $j=eval{decode_json(<STDIN>)}; print $j->{newestUpdateAt}//""' < "$STATE/meta.json" 2>/dev/null || true)
 newest_listing=$(perl -MJSON::PP -e '$/=undef; my $j=eval{decode_json(<STDIN>)}; print $j->{newestListingAt}//""' < "$STATE/meta.json" 2>/dev/null || true)
+# a boundary older than the store window (site outage, workflow paused) is not worth chasing: nothing behind it would be kept and the whole
+# page budget would go on it every run. Stop at the window's edge instead; build_state.pl records the hole as a listing gap and moves on.
+floor=$(date -u -d "-${LISTING_WINDOW_H:-12} hours" +%FT%T.000Z 2>/dev/null || true)
+if [ -n "$newest_listing" ] && [ -n "$floor" ] && [[ "$newest_listing" < "$floor" ]]; then log "previous listing boundary $newest_listing is older than the ${LISTING_WINDOW_H:-12}h store window; stopping at $floor"; newest_listing="$floor"; fi
 log "=== run start FULL=$FULL newestUpdate=${newest_update:-none} newestListing=${newest_listing:-none} maxTradePages=$MAX_TRADE_PAGES listingMinutes=$LISTING_MINUTES"
 
 echo "[1/4] value lists"
@@ -86,6 +95,7 @@ while [ "$LPAGES" -lt "$MAX_TRADE_PAGES" ]; do
   [ "$more" = "1" ] && [ "$cursor" != "-" ] || { REACHED=1; break; }
 done
 [ "$LPAGES" -eq 0 ] && REACHED=0
+write_run   # listing coverage is final from here on; a kill during the profile phase must not report it as a failed run
 
 echo "[4/4] trader profiles (up to $PROFILES_PER_RUN not refreshed in ${PROFILE_MAX_AGE_H}h)"
 perl -MJSON::PP -e '

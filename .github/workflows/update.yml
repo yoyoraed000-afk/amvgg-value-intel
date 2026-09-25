@@ -40,7 +40,8 @@ jobs:
           last=$(git log -1 --format=%ct origin/main 2>/dev/null || git log -1 --format=%ct)
           age_days=$(( ( $(date +%s) - last ) / 86400 ))
           echo "main last committed $age_days days ago"
-          if [ "$age_days" -ge 25 ]; then
+          # only from the default branch: a manual dispatch from another branch (shallow checkout, no origin/main) must not push that branch to main
+          if [ "$age_days" -ge 25 ] && [ "${{ github.ref }}" = "refs/heads/${{ github.event.repository.default_branch }}" ]; then
             echo "last keepalive: $(date -u +%F)" > KEEPALIVE.md
             git -c user.name=amvgg-bot -c user.email=amvgg-bot@users.noreply.github.com add KEEPALIVE.md
             git -c user.name=amvgg-bot -c user.email=amvgg-bot@users.noreply.github.com commit -qm "keepalive $(date -u +%F)"
@@ -79,12 +80,14 @@ jobs:
           echo "full=$full" >> "$GITHUB_OUTPUT"; echo "deep pass: $full (last deep run: ${last:-never})"
 
       - name: Collect new data from amvgg.com
-        # bounded: the collector caps its own retries and the listing phase; the outer timeout guarantees the merge/verify/publish steps still run
+        # bounded: the collector caps its own retries and the listing phase; the outer timeout guarantees the merge/verify/publish steps still run.
+        # No --foreground: timeout then signals the collector's whole process group (its curl/sleep children included, so nothing keeps writing
+        # into build/raw while the merge reads it) and -k kills anything that ignored TERM 30 s later
         env:
           FULL: ${{ steps.mode.outputs.full }}
         run: |
           echo "FULL=$FULL"
-          timeout --foreground 42m bash build/collect_incremental.sh || echo "::warning::collector exited $? (partial data; see build/raw/collect.log)"
+          timeout -k 30s 42m bash build/collect_incremental.sh || echo "::warning::collector exited $? (partial data; see build/raw/collect.log)"
           tail -3 build/raw/collect.log || true
           cat build/raw/run.json 2>/dev/null || echo '{"listingBoundaryReached":false,"failed":99,"degraded":true}' > build/raw/run.json
 
@@ -93,13 +96,26 @@ jobs:
           FULL: ${{ steps.mode.outputs.full }}
         run: perl build/build_state.pl site/data.json
 
+      - name: Keep a sample of any profile page that was not a rendered profile
+        # about half the profile fetches on the runner have come back without a rendered profile: the sample shows what the site served
+        if: hashFiles('build/raw/profile-unparsed.html') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: unparsed-profile-${{ github.run_id }}
+          path: build/raw/profile-unparsed.html
+          retention-days: 3
+
       - name: Verify the build before publishing
         run: |
           set -euo pipefail
+          # the item floor is relative to the previous store (a category the site retires must not stall every run), with a small absolute floor
           perl -MJSON::PP -e '
-            $/=undef; my $j=decode_json(<STDIN>); my $c=$j->{meta}{counts};
-            printf "items=%d updates=%d listings=%d completed=%d profiles=%d (stats %d) synthetic=%d degraded=%s boundary=%s\n", @$c{qw(items updates listings completed profiles profilesWithStats syntheticUpdates)}, $j->{meta}{run}{degraded}, $j->{meta}{run}{listingBoundaryReached};
-            die "too few items ($c->{items})\n" if $c->{items} < 1500;
+            $/=undef; my $j=decode_json(<STDIN>); my $c=$j->{meta}{counts}; my $r=$j->{meta}{run};
+            my $prev = {}; if (open my $p, "<", "$ENV{RUNNER_TEMP}/prev_meta.json") { local $/; $prev = eval { decode_json(<$p>) } || {} }
+            my $pi = $prev->{storeCounts}{items} // 0;
+            printf "items=%d (previous store %d) updates=%d listings=%d completed=%d profiles=%d (stats %d, %d pages not rendered) synthetic=%d degraded=%s boundary=%s\n", $c->{items}, $pi, @$c{qw(updates listings completed profiles profilesWithStats)}, $r->{unparsedProfiles} // 0, $c->{syntheticUpdates}, $r->{degraded}, $r->{listingBoundaryReached};
+            die "too few items ($c->{items})\n" if $c->{items} < 500;
+            die "item count dropped from $pi to $c->{items} (more than 15%): refusing to publish\n" if $pi && $c->{items} < 0.85 * $pi;
             die "no completed trades\n" if $c->{completed} < 100;
             die "profiles exported without stats\n" if $c->{profiles} >= 50 && $c->{profilesWithStats} == 0;
           ' < site/data.json
@@ -108,7 +124,7 @@ jobs:
           {
             echo "### Update $(date -u +'%F %H:%M') UTC"
             perl -MJSON::PP -e '$/=undef; my $j=decode_json(<STDIN>); my $m=$j->{meta}; my $c=$m->{counts}; my $r=$m->{run};
-              printf "- items %d, update rows %d (%d synthetic closes), listings %d (%dh), completed %d (%dd), profiles %d (stats for %d)\n- this run: +%d updates, +%d listings, +%d completed, +%d profiles; boundary %s; degraded %s; failed fetches %d\n", $c->{items}, $c->{updates}, $c->{syntheticUpdates}, $c->{listings}, $m->{listingWindowHours}, $c->{completed}, $m->{completedWindowDays}, $c->{profiles}, $c->{profilesWithStats}, $r->{newUpdates}, $r->{newListings}, $r->{newCompleted}, $r->{newProfiles}, ($r->{listingBoundaryReached}?"reached":"NOT reached"), ($r->{degraded}?"yes":"no"), $r->{failedFetches};
+              printf "- items %d, update rows %d (%d synthetic closes), listings %d (%dh), completed %d (%dd), profiles %d (stats for %d)\n- this run: +%d updates, +%d listings, +%d completed, +%d profiles (%d pages were not rendered profiles); boundary %s; degraded %s; failed fetches %d\n", $c->{items}, $c->{updates}, $c->{syntheticUpdates}, $c->{listings}, $m->{listingWindowHours}, $c->{completed}, $m->{completedWindowDays}, $c->{profiles}, $c->{profilesWithStats}, $r->{newUpdates}, $r->{newListings}, $r->{newCompleted}, $r->{newProfiles}, $r->{unparsedProfiles} // 0, ($r->{listingBoundaryReached}?"reached":"NOT reached"), ($r->{degraded}?"yes":"no"), $r->{failedFetches};
               print "- warnings: ", join("; ", @{$r->{warnings}||[]}), "\n" if @{$r->{warnings}||[]};
               print "- listing gaps on record: ", scalar(@{$m->{listingGaps}||[]}), "\n";' < site/data.json
           } >> "$GITHUB_STEP_SUMMARY"

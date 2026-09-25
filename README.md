@@ -3,7 +3,7 @@
 Predicts 30-day value moves for every pet and item on amvgg.com, from three evidence layers:
 
 1. **History layer** – the site's own value-update log, replayed into daily values, turned into weekly features per item and fitted with a three-class softmax model (raise / lower / hold in the next 30 days). Backtested on held-out weeks.
-2. **Market layer** – live listings and completed trades, priced variant-by-variant with today's values. Overpay premiums, want-to-offer ratios and asking premiums become a pressure score with a confidence level. Reputation-weighted, age-decayed, capped per trader.
+2. **Market layer** – live listings and completed trades, priced variant-by-variant with today's values. Overpay premiums, want-to-offer ratios and asking premiums become a pressure score with a confidence level. Reputation-weighted, age-decayed, capped per trader (newest trades first), mirrored trade pairs counted once; a direction call from trade evidence needs traders with a track record and a gap that survives leaving any single trader out.
 3. **Implied values** – completed trades solved jointly (Huber loss, ridge-anchored to the listed values) to get the value each item would need for its trades to balance.
 
 The dashboard (`site/index.html`) blends the layers into a call per item, ranks alerts, explains each call, and shows the backtest.
@@ -44,7 +44,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File serve.ps1
 
 `.github/workflows/update.yml` runs every hour on GitHub's machines: it restores the rolling store from the `data` branch, fetches only what is new (`build/collect_incremental.sh`), merges it (`build/build_state.pl`), publishes `site/` to GitHub Pages, and force-pushes the store back to `data` as a single commit so the repo never grows. The job runs a deeper pass by itself every ~20 hours (more listings, up to 800 trader profiles). Trigger a run by hand from the Actions tab ("Run workflow", tick *Deep pass* for the long version).
 
-Rolling store windows: every value update ever seen, listings from the last 12 hours (the page ships the last 6), completed trades from the last 60 days (the page ships 30), and one profile record per trader (refreshed at most daily, sooner when its stats are missing). Each run records whether it reached the previous listings; gaps are kept in the store and shown on the Overview.
+Rolling store windows: every value update ever seen, listings from the last 12 hours (the page ships the last 6), completed trades from the last 60 days (the page ships 30), and one profile record per trader (refreshed at most daily, sooner when its stats are missing). Each run records whether it reached the previous listings; gaps are kept in the store and shown on the Overview. A boundary older than the 12 h window is abandoned (the hole is recorded as a gap) so an outage cannot freeze it, and a run whose collector was killed counts as not reached. A profile page that comes back without a rendered profile (challenge page, login wall) never overwrites a known record; one sample per run is kept as a workflow artifact.
 
 One-time setup after pushing: Settings → Pages → Source = **GitHub Actions**. The dashboard then lives at `https://<user>.github.io/<repo>/` (add a CNAME in Cloudflare for `intel.amvgg.com` if wanted).
 
